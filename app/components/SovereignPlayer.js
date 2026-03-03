@@ -17,7 +17,7 @@ function YouTubePlayerMode({ youtubeChannel }) {
   useEffect(() => {
     if (!youtubeChannel?.handle) return;
     setLoading(true);
-    fetch(`/api/youtube/feed?handle=${encodeURIComponent(youtubeChannel.handle)}`)
+    fetch(`/api/youtube/feed?handle=${encodeURIComponent(youtubeChannel.handle)}&channelId=${encodeURIComponent(youtubeChannel.channelId || '')}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.videos && data.videos.length > 0) {
