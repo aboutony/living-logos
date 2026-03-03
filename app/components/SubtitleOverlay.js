@@ -10,14 +10,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
  * engine with Sacred Glossary enforcement.
  *
  * Works with ANY audio source: YouTube, Facebook, live streams, audio files, etc.
- * The microphone picks up the audio playing on the device.
- *
- * Props:
- *   streamId   — Active stream ID for subtitle context
- *   enabled    — Whether subtitles are visible
- *   onClose    — Callback to toggle off
- *   autoEnable — Directive 010: Auto-enable for Tier 1/2 streams
- *   streamTier — Authority tier level (1, 2, or 3)
  */
 
 const LANGUAGES = [
@@ -49,17 +41,12 @@ const LANGUAGES = [
     { code: "tl", name: "Tagalog", flag: "🇵🇭", speechCode: "fil-PH" },
 ];
 
-// Sacred term marker renderer
 function renderSubtitleText(text) {
     if (!text) return null;
     const parts = text.split("⸬");
     return parts.map((part, idx) => {
         if (idx % 2 === 1) {
-            return (
-                <span key={idx} className="sacred-term">
-                    {part}
-                </span>
-            );
+            return <span key={idx} className="sacred-term">{part}</span>;
         }
         return <span key={idx}>{part}</span>;
     });
@@ -76,42 +63,71 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
     const [micError, setMicError] = useState(null);
     const [statusText, setStatusText] = useState("Tap 🎙️ to start live translation");
 
+    // Refs for stable callbacks (avoid stale closure bugs)
+    const listeningRef = useRef(false);
     const recognitionRef = useRef(null);
     const translateTimeout = useRef(null);
+    const sourceLangRef = useRef(sourceLang);
+    const targetLangRef = useRef(targetLang);
 
-    // Check for Web Speech API support
+    // Keep refs in sync with state
+    useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
+    useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
+
     const isSpeechSupported = typeof window !== "undefined" &&
         ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
-    // Start/stop speech recognition
-    const toggleListening = useCallback(() => {
+    // Translate via Patristic AI
+    const translateSpeech = useCallback(async (text) => {
+        if (!text || text.length < 2) return;
+        try {
+            const res = await fetch("/api/ai/translate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    text,
+                    sourceLang: sourceLangRef.current,
+                    targetLang: targetLangRef.current,
+                    streamId,
+                }),
+            });
+            const data = await res.json();
+            if (data.success && data.translation) {
+                setTranslatedText(data.translation.translatedText || text);
+                setSacredTermCount(data.translation.sacredTerms?.length || 0);
+                setVetted(data.translation.sacredTerms?.length > 0);
+                setStatusText("🔴 Live translating…");
+            }
+        } catch {
+            // Silent fail
+        }
+    }, [streamId]);
+
+    // Create and start a new recognition instance
+    const startRecognition = useCallback(() => {
         if (!isSpeechSupported) {
-            setMicError("Speech recognition not supported in this browser");
+            setMicError("Speech recognition not supported in this browser. Use Chrome or Edge.");
             return;
         }
 
-        if (isListening) {
-            // Stop
-            recognitionRef.current?.stop();
-            setIsListening(false);
-            setStatusText("Paused — tap 🎙️ to resume");
-            return;
+        // Stop any existing instance
+        if (recognitionRef.current) {
+            try { recognitionRef.current.abort(); } catch { }
+            recognitionRef.current = null;
         }
 
-        // Start
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SpeechRecognition();
 
-        const sourceLangObj = LANGUAGES.find((l) => l.code === sourceLang);
-        recognition.lang = sourceLangObj?.speechCode || "el-GR";
+        const langObj = LANGUAGES.find((l) => l.code === sourceLangRef.current);
+        recognition.lang = langObj?.speechCode || "el-GR";
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.maxAlternatives = 1;
 
         recognition.onstart = () => {
-            setIsListening(true);
             setMicError(null);
-            setStatusText("🔴 Listening…");
+            setStatusText("🔴 Listening — speak or play audio…");
         };
 
         recognition.onresult = (event) => {
@@ -127,14 +143,11 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                 }
             }
 
-            // Show interim results immediately
             const displayText = finalTranscript || interimTranscript;
             if (displayText) {
                 setTranscript(displayText);
-
-                // Debounce translation call (only translate final results or after 1.5s pause)
                 clearTimeout(translateTimeout.current);
-                const delay = finalTranscript ? 200 : 1500;
+                const delay = finalTranscript ? 100 : 1200;
                 translateTimeout.current = setTimeout(() => {
                     translateSpeech(displayText);
                 }, delay);
@@ -143,26 +156,34 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
 
         recognition.onerror = (event) => {
             if (event.error === "no-speech") {
-                setStatusText("🔇 No speech detected — ensure audio is audible");
+                setStatusText("🔇 No speech detected — make sure audio is playing");
+                // Don't stop, it will auto-restart via onend
             } else if (event.error === "not-allowed") {
-                setMicError("Microphone access denied — please allow in browser settings");
+                setMicError("🎙️ Microphone access denied — please allow in browser settings");
+                listeningRef.current = false;
                 setIsListening(false);
             } else if (event.error === "aborted") {
-                // User stopped, ignore
+                // Intentional stop, ignore
             } else {
-                setMicError(`Speech error: ${event.error}`);
+                setStatusText(`⚠ ${event.error} — retrying…`);
             }
         };
 
         recognition.onend = () => {
-            // Auto-restart if still in listening mode (continuous recognition)
-            if (isListening) {
-                try {
-                    recognition.start();
-                } catch {
-                    setIsListening(false);
-                    setStatusText("Tap 🎙️ to restart");
-                }
+            // Auto-restart if we're still supposed to be listening
+            // Using ref instead of state to avoid stale closure
+            if (listeningRef.current) {
+                setTimeout(() => {
+                    if (listeningRef.current) {
+                        try {
+                            startRecognition();
+                        } catch {
+                            listeningRef.current = false;
+                            setIsListening(false);
+                            setStatusText("Tap 🎙️ to restart");
+                        }
+                    }
+                }, 200);
             }
         };
 
@@ -170,61 +191,70 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
             recognition.start();
             recognitionRef.current = recognition;
         } catch (err) {
-            setMicError("Could not start speech recognition");
+            setMicError("Could not start speech recognition: " + err.message);
         }
-    }, [isListening, sourceLang, isSpeechSupported]);
+    }, [isSpeechSupported, translateSpeech]);
 
-    // Translate recognized speech via Patristic AI
-    const translateSpeech = async (text) => {
-        if (!text || text.length < 2) return;
-        try {
-            const res = await fetch("/api/ai/translate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    text,
-                    sourceLang,
-                    targetLang,
-                    streamId,
-                }),
-            });
-            const data = await res.json();
-            if (data.success && data.translation) {
-                setTranslatedText(data.translation.translatedText || text);
-                setSacredTermCount(data.translation.sacredTerms?.length || 0);
-                setVetted(data.translation.sacredTerms?.length > 0);
-                setStatusText("🔴 Live translating…");
+    // Toggle listening on/off
+    const toggleListening = useCallback(() => {
+        if (listeningRef.current) {
+            // Stop
+            listeningRef.current = false;
+            setIsListening(false);
+            if (recognitionRef.current) {
+                try { recognitionRef.current.abort(); } catch { }
+                recognitionRef.current = null;
             }
-        } catch {
-            // Silent fail — subtitle is non-critical
+            setStatusText("Paused — tap 🎙️ to resume");
+        } else {
+            // Start
+            listeningRef.current = true;
+            setIsListening(true);
+            startRecognition();
         }
-    };
+    }, [startRecognition]);
 
-    // Stop recognition when disabled or unmounted
+    // Cleanup on unmount
     useEffect(() => {
         return () => {
-            recognitionRef.current?.stop();
+            listeningRef.current = false;
+            if (recognitionRef.current) {
+                try { recognitionRef.current.abort(); } catch { }
+            }
             clearTimeout(translateTimeout.current);
         };
     }, []);
 
-    // Stop when toggled off
+    // Stop when overlay is disabled
     useEffect(() => {
-        if (!enabled && recognitionRef.current) {
-            recognitionRef.current.stop();
+        if (!enabled) {
+            listeningRef.current = false;
+            if (recognitionRef.current) {
+                try { recognitionRef.current.abort(); } catch { }
+                recognitionRef.current = null;
+            }
             setIsListening(false);
         }
     }, [enabled]);
 
-    // Restart recognition when source language changes
+    // Restart recognition when source language changes while listening
     useEffect(() => {
-        if (isListening && recognitionRef.current) {
-            recognitionRef.current.stop();
-            setIsListening(false);
-            // Small delay then restart with new language
-            setTimeout(() => toggleListening(), 300);
+        if (listeningRef.current) {
+            if (recognitionRef.current) {
+                try { recognitionRef.current.abort(); } catch { }
+            }
+            setTimeout(() => {
+                if (listeningRef.current) startRecognition();
+            }, 300);
         }
-    }, [sourceLang]);
+    }, [sourceLang, startRecognition]);
+
+    // Re-translate when target language changes
+    useEffect(() => {
+        if (transcript) {
+            translateSpeech(transcript);
+        }
+    }, [targetLang]);
 
     if (!enabled) return null;
 
@@ -233,7 +263,6 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
             <div className="subtitle-overlay-inner">
                 {/* Controls Bar */}
                 <div className="subtitle-header">
-                    {/* Mic Button */}
                     <button
                         className={`subtitle-mic-btn ${isListening ? "active" : ""}`}
                         onClick={toggleListening}
@@ -242,7 +271,6 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                         {isListening ? "⏹" : "🎙️"}
                     </button>
 
-                    {/* Source Language */}
                     <div className="subtitle-lang-selector">
                         <label className="subtitle-lang-label">From</label>
                         <select
@@ -260,7 +288,6 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
 
                     <span className="subtitle-arrow">→</span>
 
-                    {/* Target Language */}
                     <div className="subtitle-lang-selector">
                         <label className="subtitle-lang-label">To</label>
                         <select
@@ -276,47 +303,44 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                         </select>
                     </div>
 
-                    {/* Badges */}
                     {vetted && (
                         <div className="vetting-badge">
                             <span className="vetting-badge-icon">🛡️</span>
-                            <span className="vetting-badge-text">Dogma-Vetted ✓</span>
+                            <span className="vetting-badge-text">Vetted ✓</span>
                         </div>
                     )}
 
                     <div className="glossary-lock-badge">
                         <span>🔒</span>
-                        <span>Glossary</span>
                     </div>
 
                     {streamTier && (
                         <div className={`subtitle-tier-badge tier-${streamTier}`}>
-                            {streamTier === 1 ? "Tier 1" : streamTier === 2 ? "Tier 2" : "Tier 3"}
+                            T{streamTier}
                         </div>
                     )}
 
-                    <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">
-                        ✕
-                    </button>
+                    <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
                 {/* Live Subtitle Display */}
                 <div className="subtitle-cue-container">
                     {micError ? (
                         <div className="subtitle-error">{micError}</div>
-                    ) : transcript || translatedText ? (
+                    ) : translatedText ? (
                         <>
-                            <div className="subtitle-original">
-                                {transcript}
-                            </div>
-                            <div className="subtitle-translated">
-                                {renderSubtitleText(translatedText)}
-                            </div>
+                            <div className="subtitle-original">{transcript}</div>
+                            <div className="subtitle-translated">{renderSubtitleText(translatedText)}</div>
                             {sacredTermCount > 0 && (
                                 <div className="subtitle-sacred-note">
-                                    🔒 {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked by glossary
+                                    🔒 {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked
                                 </div>
                             )}
+                        </>
+                    ) : transcript ? (
+                        <>
+                            <div className="subtitle-original">{transcript}</div>
+                            <div className="subtitle-translated subtitle-translating">Translating…</div>
                         </>
                     ) : (
                         <div className="subtitle-status">{statusText}</div>
