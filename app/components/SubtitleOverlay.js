@@ -40,6 +40,8 @@ const LANGUAGES = [
     { code: "ja", name: "Japanese", flag: "🇯🇵" },
     { code: "ko", name: "Korean", flag: "🇰🇷" },
     { code: "fa", name: "Persian", flag: "🇮🇷" },
+    { code: "he", name: "Hebrew", flag: "🇮🇱" },
+    { code: "ur", name: "Urdu", flag: "🇵🇰" },
     { code: "id", name: "Indonesian", flag: "🇮🇩" },
     { code: "tl", name: "Tagalog", flag: "🇵🇭" },
 ];
