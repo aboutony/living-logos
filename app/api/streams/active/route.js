@@ -36,6 +36,8 @@ export async function GET(request) {
             isLive: s.isLive,
             digitalSeal: s.digitalSeal,
             viewerCount: s.viewerCount,
+            pinned: s.pinned || false,
+            youtubeChannel: s.youtubeChannel || null,
         })),
     });
 }
