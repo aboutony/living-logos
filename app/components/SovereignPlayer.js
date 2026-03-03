@@ -8,7 +8,7 @@ import SubtitleOverlay from "./SubtitleOverlay";
  * Fetches the channel's video feed via /api/youtube/feed (RSS, no API key).
  * Embeds videos using youtube-nocookie.com for privacy.
  */
-function YouTubePlayerMode({ youtubeChannel }) {
+function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubtitlesEnabled, autoSubtitles, streamTier }) {
   const [videos, setVideos] = useState([]);
   const [activeVideo, setActiveVideo] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -69,6 +69,14 @@ function YouTubePlayerMode({ youtubeChannel }) {
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
           allowFullScreen
           frameBorder="0"
+        />
+        {/* Subtitle Overlay — renders on top of iframe */}
+        <SubtitleOverlay
+          streamId={streamId || "stream-rumorthodox"}
+          enabled={subtitlesEnabled}
+          onClose={() => setSubtitlesEnabled(false)}
+          autoEnable={autoSubtitles}
+          streamTier={streamTier}
         />
       </div>
 
@@ -242,7 +250,14 @@ export default function SovereignPlayer({
     >
       {/* YouTube In-Platform Player */}
       {youtubeChannel ? (
-        <YouTubePlayerMode youtubeChannel={youtubeChannel} />
+        <YouTubePlayerMode
+          youtubeChannel={youtubeChannel}
+          streamId={streamId}
+          subtitlesEnabled={subtitlesEnabled}
+          setSubtitlesEnabled={setSubtitlesEnabled}
+          autoSubtitles={autoSubtitles}
+          streamTier={streamTier}
+        />
       ) : (
         <>
           {/* Video Element */}

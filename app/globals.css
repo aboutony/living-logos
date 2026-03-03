@@ -2555,6 +2555,13 @@ body,
   width: 100%;
   height: 100%;
   border: none;
+  z-index: 1;
+}
+
+/* Subtitle overlay ON TOP of YouTube iframe */
+.youtube-iframe-container .subtitle-overlay {
+  z-index: 10;
+  bottom: 8px;
 }
 
 /* Loading State */
