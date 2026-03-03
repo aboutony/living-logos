@@ -2538,6 +2538,7 @@ body,
   flex-direction: column;
   background: linear-gradient(180deg, #0A0A14 0%, #121228 100%);
   position: relative;
+  z-index: 60;
 }
 
 .youtube-channel-hero {
