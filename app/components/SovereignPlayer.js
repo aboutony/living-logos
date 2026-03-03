@@ -4,10 +4,111 @@ import { useRef, useState, useEffect } from "react";
 import SubtitleOverlay from "./SubtitleOverlay";
 
 /**
- * SovereignPlayer — Ad-free HTML5 video player shell
- * Zero third-party scripts. Supports HLS via hls.js.
- * Features: custom controls, PiP, fullscreen.
+ * YouTubePlayerMode — In-platform YouTube channel viewer.
+ * Fetches the channel's video feed via /api/youtube/feed (RSS, no API key).
+ * Embeds videos using youtube-nocookie.com for privacy.
  */
+function YouTubePlayerMode({ youtubeChannel }) {
+  const [videos, setVideos] = useState([]);
+  const [activeVideo, setActiveVideo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!youtubeChannel?.handle) return;
+    setLoading(true);
+    fetch(`/api/youtube/feed?handle=${encodeURIComponent(youtubeChannel.handle)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.videos && data.videos.length > 0) {
+          setVideos(data.videos);
+          setActiveVideo(data.videos[0]);
+        } else {
+          setError("No videos found");
+        }
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err.message);
+        setLoading(false);
+      });
+  }, [youtubeChannel?.handle]);
+
+  if (loading) {
+    return (
+      <div className="youtube-embed-wrap">
+        <div className="youtube-loading">
+          <div className="youtube-loading-icon">☦</div>
+          <p>Loading {youtubeChannel.name} feed…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !activeVideo) {
+    return (
+      <div className="youtube-embed-wrap">
+        <div className="youtube-loading">
+          <div className="youtube-loading-icon">⚠</div>
+          <p>Could not load channel feed</p>
+          <p style={{ fontSize: "12px", opacity: 0.5 }}>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="youtube-embed-wrap">
+      {/* Embedded Video Player */}
+      <div className="youtube-iframe-container">
+        <iframe
+          key={activeVideo.videoId}
+          className="youtube-iframe"
+          src={`${activeVideo.embedUrl}?autoplay=1&rel=0&modestbranding=1`}
+          title={activeVideo.title}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+          allowFullScreen
+          frameBorder="0"
+        />
+      </div>
+
+      {/* Now-Playing Bar */}
+      <div className="youtube-now-playing">
+        <div className="youtube-now-info">
+          <span className="youtube-now-title">{activeVideo.title}</span>
+          <span className="youtube-now-meta">
+            {activeVideo.views?.toLocaleString() || 0} views · {youtubeChannel.name}
+          </span>
+        </div>
+      </div>
+
+      {/* Video Gallery */}
+      {videos.length > 1 && (
+        <div className="youtube-gallery">
+          <div className="youtube-gallery-scroll">
+            {videos.map((v) => (
+              <button
+                key={v.videoId}
+                className={`youtube-gallery-item ${v.videoId === activeVideo.videoId ? "active" : ""}`}
+                onClick={() => setActiveVideo(v)}
+              >
+                <img
+                  src={v.thumbnail}
+                  alt={v.title}
+                  className="youtube-gallery-thumb"
+                />
+                {v.videoId === activeVideo.videoId && (
+                  <div className="youtube-gallery-playing">▶ Playing</div>
+                )}
+                <span className="youtube-gallery-title">{v.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 export default function SovereignPlayer({
   src,
   posterUrl,
@@ -139,55 +240,9 @@ export default function SovereignPlayer({
       onMouseMove={handleMouseMove}
       onMouseLeave={() => isPlaying && setShowControls(false)}
     >
-      {/* YouTube Channel Mode */}
+      {/* YouTube In-Platform Player */}
       {youtubeChannel ? (
-        <div className="youtube-embed-wrap">
-          <div className="youtube-channel-hero">
-            <div className="youtube-hero-icon">☦</div>
-            <h2 className="youtube-hero-title">{youtubeChannel.name}</h2>
-            <p className="youtube-hero-desc">{youtubeChannel.description}</p>
-            <div className="youtube-hero-stats">
-              <span className="youtube-hero-stat">
-                <strong>{youtubeChannel.subscribers?.toLocaleString()}</strong> subscribers
-              </span>
-              <span className="youtube-hero-divider">·</span>
-              <span className="youtube-hero-stat">
-                <strong>{youtubeChannel.videos}</strong> videos
-              </span>
-            </div>
-            {youtubeChannel.languages && (
-              <div className="youtube-hero-langs">
-                {youtubeChannel.languages.map((l) => (
-                  <span key={l} className="youtube-lang-pill">{l.toUpperCase()}</span>
-                ))}
-              </div>
-            )}
-            <a
-              href={`https://www.youtube.com/${youtubeChannel.handle}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="youtube-hero-btn"
-            >
-              ▶ Watch on YouTube
-            </a>
-          </div>
-          <div className="youtube-channel-bar">
-            <div className="youtube-channel-info">
-              <span className="youtube-channel-name">☦ {youtubeChannel.name}</span>
-              <span className="youtube-channel-meta">
-                Sovereign relay · {youtubeChannel.videos} canonical videos
-              </span>
-            </div>
-            <a
-              href={`https://www.youtube.com/${youtubeChannel.handle}/live`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="youtube-channel-link"
-            >
-              🔴 Live ↗
-            </a>
-          </div>
-        </div>
+        <YouTubePlayerMode youtubeChannel={youtubeChannel} />
       ) : (
         <>
           {/* Video Element */}
