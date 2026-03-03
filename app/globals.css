@@ -1529,6 +1529,79 @@ body,
   background: rgba(255, 255, 255, 0.1);
 }
 
+/* Mic Toggle Button */
+.subtitle-mic-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out);
+  color: #fff;
+}
+
+.subtitle-mic-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.subtitle-mic-btn.active {
+  background: rgba(220, 38, 38, 0.25);
+  border-color: rgba(220, 38, 38, 0.6);
+  animation: micPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes micPulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px rgba(220, 38, 38, 0);
+  }
+}
+
+.subtitle-arrow {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.subtitle-status {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  padding: 8px 0;
+}
+
+.subtitle-error {
+  font-size: 12px;
+  color: #ef4444;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.subtitle-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.subtitle-lang-selector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .subtitle-cue-container {
   min-height: 48px;
 }

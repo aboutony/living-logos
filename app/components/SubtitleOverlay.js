@@ -1,16 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Patristic AI Real-Time Subtitles
+ * SubtitleOverlay — Patristic AI Real-Time Auto-Translation
  *
- * Renders translated subtitles over the Sovereign Player viewport.
- * Sacred terms are highlighted with gold accents.
- * Shows "Dogma-Vetted ✓" badge for approved translations.
+ * Uses the browser's Web Speech API to listen to audio via microphone,
+ * transcribe speech in real-time, and translate it through the Patristic AI
+ * engine with Sacred Glossary enforcement.
+ *
+ * Works with ANY audio source: YouTube, Facebook, live streams, audio files, etc.
+ * The microphone picks up the audio playing on the device.
  *
  * Props:
- *   streamId   — Active stream ID for subtitle generation
+ *   streamId   — Active stream ID for subtitle context
  *   enabled    — Whether subtitles are visible
  *   onClose    — Callback to toggle off
  *   autoEnable — Directive 010: Auto-enable for Tier 1/2 streams
@@ -18,40 +21,39 @@ import { useState, useEffect, useCallback } from "react";
  */
 
 const LANGUAGES = [
-    { code: "el", name: "Greek", flag: "🇬🇷" },
-    { code: "en", name: "English", flag: "🇬🇧" },
-    { code: "ar", name: "Arabic", flag: "🇱🇧" },
-    { code: "ru", name: "Russian", flag: "🇷🇺" },
-    { code: "ro", name: "Romanian", flag: "🇷🇴" },
-    { code: "sr", name: "Serbian", flag: "🇷🇸" },
-    { code: "bg", name: "Bulgarian", flag: "🇧🇬" },
-    { code: "tr", name: "Turkish", flag: "🇹🇷" },
-    { code: "ka", name: "Georgian", flag: "🇬🇪" },
-    { code: "fr", name: "French", flag: "🇫🇷" },
-    { code: "de", name: "German", flag: "🇩🇪" },
-    { code: "it", name: "Italian", flag: "🇮🇹" },
-    { code: "es", name: "Spanish", flag: "🇪🇸" },
-    { code: "pt", name: "Portuguese", flag: "🇧🇷" },
-    { code: "no", name: "Norwegian", flag: "🇳🇴" },
-    { code: "sw", name: "Swahili", flag: "🇰🇪" },
-    { code: "am", name: "Amharic", flag: "🇪🇹" },
-    { code: "zh", name: "Mandarin", flag: "🇨🇳" },
-    { code: "hi", name: "Hindi", flag: "🇮🇳" },
-    { code: "ja", name: "Japanese", flag: "🇯🇵" },
-    { code: "ko", name: "Korean", flag: "🇰🇷" },
-    { code: "fa", name: "Persian", flag: "🇮🇷" },
-    { code: "he", name: "Hebrew", flag: "🇮🇱" },
-    { code: "ur", name: "Urdu", flag: "🇵🇰" },
-    { code: "id", name: "Indonesian", flag: "🇮🇩" },
-    { code: "tl", name: "Tagalog", flag: "🇵🇭" },
+    { code: "el", name: "Greek", flag: "🇬🇷", speechCode: "el-GR" },
+    { code: "en", name: "English", flag: "🇬🇧", speechCode: "en-US" },
+    { code: "ar", name: "Arabic", flag: "🇱🇧", speechCode: "ar-SA" },
+    { code: "ru", name: "Russian", flag: "🇷🇺", speechCode: "ru-RU" },
+    { code: "ro", name: "Romanian", flag: "🇷🇴", speechCode: "ro-RO" },
+    { code: "sr", name: "Serbian", flag: "🇷🇸", speechCode: "sr-RS" },
+    { code: "bg", name: "Bulgarian", flag: "🇧🇬", speechCode: "bg-BG" },
+    { code: "tr", name: "Turkish", flag: "🇹🇷", speechCode: "tr-TR" },
+    { code: "ka", name: "Georgian", flag: "🇬🇪", speechCode: "ka-GE" },
+    { code: "fr", name: "French", flag: "🇫🇷", speechCode: "fr-FR" },
+    { code: "de", name: "German", flag: "🇩🇪", speechCode: "de-DE" },
+    { code: "it", name: "Italian", flag: "🇮🇹", speechCode: "it-IT" },
+    { code: "es", name: "Spanish", flag: "🇪🇸", speechCode: "es-ES" },
+    { code: "pt", name: "Portuguese", flag: "🇧🇷", speechCode: "pt-BR" },
+    { code: "no", name: "Norwegian", flag: "🇳🇴", speechCode: "nb-NO" },
+    { code: "sw", name: "Swahili", flag: "🇰🇪", speechCode: "sw-KE" },
+    { code: "am", name: "Amharic", flag: "🇪🇹", speechCode: "am-ET" },
+    { code: "zh", name: "Mandarin", flag: "🇨🇳", speechCode: "zh-CN" },
+    { code: "hi", name: "Hindi", flag: "🇮🇳", speechCode: "hi-IN" },
+    { code: "ja", name: "Japanese", flag: "🇯🇵", speechCode: "ja-JP" },
+    { code: "ko", name: "Korean", flag: "🇰🇷", speechCode: "ko-KR" },
+    { code: "fa", name: "Persian", flag: "🇮🇷", speechCode: "fa-IR" },
+    { code: "he", name: "Hebrew", flag: "🇮🇱", speechCode: "he-IL" },
+    { code: "ur", name: "Urdu", flag: "🇵🇰", speechCode: "ur-PK" },
+    { code: "id", name: "Indonesian", flag: "🇮🇩", speechCode: "id-ID" },
+    { code: "tl", name: "Tagalog", flag: "🇵🇭", speechCode: "fil-PH" },
 ];
 
-// Sacred term marker (⸬term⸬)
+// Sacred term marker renderer
 function renderSubtitleText(text) {
     if (!text) return null;
     const parts = text.split("⸬");
     return parts.map((part, idx) => {
-        // Odd indices are sacred terms (between markers)
         if (idx % 2 === 1) {
             return (
                 <span key={idx} className="sacred-term">
@@ -64,111 +66,203 @@ function renderSubtitleText(text) {
 }
 
 export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable, streamTier }) {
+    const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
-    const [subtitles, setSubtitles] = useState([]);
-    const [currentCue, setCurrentCue] = useState(null);
-    const [loading, setLoading] = useState(false);
+    const [isListening, setIsListening] = useState(false);
+    const [transcript, setTranscript] = useState("");
+    const [translatedText, setTranslatedText] = useState("");
+    const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
+    const [micError, setMicError] = useState(null);
+    const [statusText, setStatusText] = useState("Tap 🎙️ to start live translation");
 
-    // Fetch subtitles when language changes
-    const fetchSubtitles = useCallback(async () => {
-        if (!streamId || !enabled) return;
-        setLoading(true);
+    const recognitionRef = useRef(null);
+    const translateTimeout = useRef(null);
+
+    // Check for Web Speech API support
+    const isSpeechSupported = typeof window !== "undefined" &&
+        ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+
+    // Start/stop speech recognition
+    const toggleListening = useCallback(() => {
+        if (!isSpeechSupported) {
+            setMicError("Speech recognition not supported in this browser");
+            return;
+        }
+
+        if (isListening) {
+            // Stop
+            recognitionRef.current?.stop();
+            setIsListening(false);
+            setStatusText("Paused — tap 🎙️ to resume");
+            return;
+        }
+
+        // Start
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+
+        const sourceLangObj = LANGUAGES.find((l) => l.code === sourceLang);
+        recognition.lang = sourceLangObj?.speechCode || "el-GR";
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+            setIsListening(true);
+            setMicError(null);
+            setStatusText("🔴 Listening…");
+        };
+
+        recognition.onresult = (event) => {
+            let interimTranscript = "";
+            let finalTranscript = "";
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const t = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalTranscript += t;
+                } else {
+                    interimTranscript += t;
+                }
+            }
+
+            // Show interim results immediately
+            const displayText = finalTranscript || interimTranscript;
+            if (displayText) {
+                setTranscript(displayText);
+
+                // Debounce translation call (only translate final results or after 1.5s pause)
+                clearTimeout(translateTimeout.current);
+                const delay = finalTranscript ? 200 : 1500;
+                translateTimeout.current = setTimeout(() => {
+                    translateSpeech(displayText);
+                }, delay);
+            }
+        };
+
+        recognition.onerror = (event) => {
+            if (event.error === "no-speech") {
+                setStatusText("🔇 No speech detected — ensure audio is audible");
+            } else if (event.error === "not-allowed") {
+                setMicError("Microphone access denied — please allow in browser settings");
+                setIsListening(false);
+            } else if (event.error === "aborted") {
+                // User stopped, ignore
+            } else {
+                setMicError(`Speech error: ${event.error}`);
+            }
+        };
+
+        recognition.onend = () => {
+            // Auto-restart if still in listening mode (continuous recognition)
+            if (isListening) {
+                try {
+                    recognition.start();
+                } catch {
+                    setIsListening(false);
+                    setStatusText("Tap 🎙️ to restart");
+                }
+            }
+        };
+
+        try {
+            recognition.start();
+            recognitionRef.current = recognition;
+        } catch (err) {
+            setMicError("Could not start speech recognition");
+        }
+    }, [isListening, sourceLang, isSpeechSupported]);
+
+    // Translate recognized speech via Patristic AI
+    const translateSpeech = async (text) => {
+        if (!text || text.length < 2) return;
         try {
             const res = await fetch("/api/ai/translate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    text: "Τὴν Θεοτόκον καὶ Μητέρα τοῦ Φωτὸς ἐν ὕμνοις τιμῶντες μεγαλύνωμεν",
-                    sourceLang: "el",
+                    text,
+                    sourceLang,
                     targetLang,
                     streamId,
                 }),
             });
             const data = await res.json();
-            if (data.success && data.subtitles) {
-                setSubtitles(data.subtitles);
-                setCurrentCue(data.subtitles[3] || data.subtitles[0]); // Show Theotokos cue
-                setVetted(false);
+            if (data.success && data.translation) {
+                setTranslatedText(data.translation.translatedText || text);
+                setSacredTermCount(data.translation.sacredTerms?.length || 0);
+                setVetted(data.translation.sacredTerms?.length > 0);
+                setStatusText("🔴 Live translating…");
             }
         } catch {
-            // Silent fail — subtitles are non-critical
-        } finally {
-            setLoading(false);
-        }
-    }, [streamId, targetLang, enabled]);
-
-    useEffect(() => {
-        fetchSubtitles();
-    }, [fetchSubtitles]);
-
-    // Simulate cycling through cues
-    useEffect(() => {
-        if (!subtitles.length || !enabled) return;
-        let idx = subtitles.indexOf(currentCue);
-        if (idx < 0) idx = 0;
-
-        const interval = setInterval(() => {
-            idx = (idx + 1) % subtitles.length;
-            setCurrentCue(subtitles[idx]);
-        }, 8000);
-
-        return () => clearInterval(interval);
-    }, [subtitles, enabled, currentCue]);
-
-    // Submit current cue for vetting
-    const handleVettingSubmit = async () => {
-        if (!currentCue) return;
-        try {
-            const res = await fetch("/api/ai/vetting", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    sourceText: currentCue.originalText,
-                    sourceLang: "el",
-                    targetLang,
-                    translatedText: currentCue.text,
-                    sacredTermsDetected: currentCue.sacredTerms?.map((t) => t.id) || [],
-                    streamId,
-                    confidence: 0.85,
-                }),
-            });
-            const data = await res.json();
-            if (data.success) {
-                // Auto-approve for demo purposes
-                await fetch("/api/ai/vetting", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        action: "approve",
-                        id: data.entry.id,
-                        reviewerName: "Tier 1 Editorial Board",
-                    }),
-                });
-                setVetted(true);
-            }
-        } catch {
-            // Silent fail
+            // Silent fail — subtitle is non-critical
         }
     };
 
-    // Auto-submit for vetting on load
+    // Stop recognition when disabled or unmounted
     useEffect(() => {
-        if (currentCue && enabled && !vetted) {
-            const timer = setTimeout(handleVettingSubmit, 1500);
-            return () => clearTimeout(timer);
+        return () => {
+            recognitionRef.current?.stop();
+            clearTimeout(translateTimeout.current);
+        };
+    }, []);
+
+    // Stop when toggled off
+    useEffect(() => {
+        if (!enabled && recognitionRef.current) {
+            recognitionRef.current.stop();
+            setIsListening(false);
         }
-    }, [currentCue, enabled]);
+    }, [enabled]);
+
+    // Restart recognition when source language changes
+    useEffect(() => {
+        if (isListening && recognitionRef.current) {
+            recognitionRef.current.stop();
+            setIsListening(false);
+            // Small delay then restart with new language
+            setTimeout(() => toggleListening(), 300);
+        }
+    }, [sourceLang]);
 
     if (!enabled) return null;
 
     return (
         <div className="subtitle-overlay">
             <div className="subtitle-overlay-inner">
-                {/* Language Selector */}
+                {/* Controls Bar */}
                 <div className="subtitle-header">
+                    {/* Mic Button */}
+                    <button
+                        className={`subtitle-mic-btn ${isListening ? "active" : ""}`}
+                        onClick={toggleListening}
+                        title={isListening ? "Stop listening" : "Start live translation"}
+                    >
+                        {isListening ? "⏹" : "🎙️"}
+                    </button>
+
+                    {/* Source Language */}
                     <div className="subtitle-lang-selector">
-                        <label className="subtitle-lang-label">☦ Patristic AI</label>
+                        <label className="subtitle-lang-label">From</label>
+                        <select
+                            value={sourceLang}
+                            onChange={(e) => setSourceLang(e.target.value)}
+                            className="subtitle-lang-dropdown"
+                        >
+                            {LANGUAGES.map((l) => (
+                                <option key={l.code} value={l.code}>
+                                    {l.flag} {l.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <span className="subtitle-arrow">→</span>
+
+                    {/* Target Language */}
+                    <div className="subtitle-lang-selector">
+                        <label className="subtitle-lang-label">To</label>
                         <select
                             value={targetLang}
                             onChange={(e) => { setTargetLang(e.target.value); setVetted(false); }}
@@ -182,7 +276,7 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                         </select>
                     </div>
 
-                    {/* Vetting Badge */}
+                    {/* Badges */}
                     {vetted && (
                         <div className="vetting-badge">
                             <span className="vetting-badge-icon">🛡️</span>
@@ -190,45 +284,42 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                         </div>
                     )}
 
-                    {/* Directive 010: Glossary Locked Indicator */}
                     <div className="glossary-lock-badge">
                         <span>🔒</span>
-                        <span>Glossary Locked</span>
+                        <span>Glossary</span>
                     </div>
 
-                    {/* Stream Tier Badge */}
                     {streamTier && (
                         <div className={`subtitle-tier-badge tier-${streamTier}`}>
-                            {streamTier === 1 ? "Tier 1 · Patriarchal" : streamTier === 2 ? "Tier 2 · Archdiocesan" : "Tier 3 · Parish"}
+                            {streamTier === 1 ? "Tier 1" : streamTier === 2 ? "Tier 2" : "Tier 3"}
                         </div>
                     )}
 
-                    {/* Close Button */}
                     <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">
                         ✕
                     </button>
                 </div>
 
-                {/* Subtitle Text */}
+                {/* Live Subtitle Display */}
                 <div className="subtitle-cue-container">
-                    {loading ? (
-                        <div className="subtitle-loading">Translating…</div>
-                    ) : currentCue ? (
+                    {micError ? (
+                        <div className="subtitle-error">{micError}</div>
+                    ) : transcript || translatedText ? (
                         <>
                             <div className="subtitle-original">
-                                {currentCue.originalText}
+                                {transcript}
                             </div>
                             <div className="subtitle-translated">
-                                {renderSubtitleText(currentCue.text)}
+                                {renderSubtitleText(translatedText)}
                             </div>
-                            {currentCue.sacredTerms?.length > 0 && (
+                            {sacredTermCount > 0 && (
                                 <div className="subtitle-sacred-note">
-                                    🔒 {currentCue.sacredTerms.length} sacred term{currentCue.sacredTerms.length > 1 ? "s" : ""} locked by glossary
+                                    🔒 {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked by glossary
                                 </div>
                             )}
                         </>
                     ) : (
-                        <div className="subtitle-loading">Awaiting liturgical audio…</div>
+                        <div className="subtitle-status">{statusText}</div>
                     )}
                 </div>
             </div>
