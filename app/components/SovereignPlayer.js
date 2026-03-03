@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
+import SubtitleOverlay from "./SubtitleOverlay";
 
 /**
  * SovereignPlayer — Ad-free HTML5 video player shell
@@ -8,205 +9,226 @@ import { useRef, useState, useEffect } from "react";
  * Features: custom controls, PiP, fullscreen.
  */
 export default function SovereignPlayer({
-    src,
-    posterUrl,
-    isAudioOnly = false,
-    children,
+  src,
+  posterUrl,
+  isAudioOnly = false,
+  streamId,
+  autoSubtitles = false,
+  streamTier,
+  children,
 }) {
-    const videoRef = useRef(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [isMuted, setIsMuted] = useState(false);
-    const [volume, setVolume] = useState(0.8);
-    const [progress, setProgress] = useState(0);
-    const [duration, setDuration] = useState(0);
-    const [isFullscreen, setIsFullscreen] = useState(false);
-    const [showControls, setShowControls] = useState(true);
-    const hideTimer = useRef(null);
+  const videoRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(0.8);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(autoSubtitles);
+  const hideTimer = useRef(null);
 
-    // Setup HLS if the src is an HLS manifest
-    useEffect(() => {
-        const video = videoRef.current;
-        if (!video || !src) return;
+  // Setup HLS if the src is an HLS manifest
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !src) return;
 
-        if (src.endsWith(".m3u8")) {
-            import("hls.js").then(({ default: Hls }) => {
-                if (Hls.isSupported()) {
-                    const hls = new Hls();
-                    hls.loadSource(src);
-                    hls.attachMedia(video);
-                } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-                    video.src = src;
-                }
-            });
-        } else {
-            video.src = src;
+    if (src.endsWith(".m3u8")) {
+      import("hls.js").then(({ default: Hls }) => {
+        if (Hls.isSupported()) {
+          const hls = new Hls();
+          hls.loadSource(src);
+          hls.attachMedia(video);
+        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          video.src = src;
         }
-    }, [src]);
-
-    function togglePlay() {
-        const video = videoRef.current;
-        if (!video) return;
-        if (video.paused) {
-            video.play();
-            setIsPlaying(true);
-        } else {
-            video.pause();
-            setIsPlaying(false);
-        }
+      });
+    } else {
+      video.src = src;
     }
+  }, [src]);
 
-    function toggleMute() {
-        const video = videoRef.current;
-        if (!video) return;
-        video.muted = !video.muted;
-        setIsMuted(video.muted);
+  function togglePlay() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play();
+      setIsPlaying(true);
+    } else {
+      video.pause();
+      setIsPlaying(false);
     }
+  }
 
-    function handleVolumeChange(e) {
-        const val = parseFloat(e.target.value);
-        setVolume(val);
-        if (videoRef.current) {
-            videoRef.current.volume = val;
-            setIsMuted(val === 0);
-        }
+  function toggleMute() {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  }
+
+  function handleVolumeChange(e) {
+    const val = parseFloat(e.target.value);
+    setVolume(val);
+    if (videoRef.current) {
+      videoRef.current.volume = val;
+      setIsMuted(val === 0);
     }
+  }
 
-    function handleTimeUpdate() {
-        const video = videoRef.current;
-        if (!video || !video.duration) return;
-        setProgress((video.currentTime / video.duration) * 100);
-        setDuration(video.duration);
+  function handleTimeUpdate() {
+    const video = videoRef.current;
+    if (!video || !video.duration) return;
+    setProgress((video.currentTime / video.duration) * 100);
+    setDuration(video.duration);
+  }
+
+  function handleSeek(e) {
+    const video = videoRef.current;
+    if (!video || !video.duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width;
+    video.currentTime = pct * video.duration;
+  }
+
+  function toggleFullscreen() {
+    const container = videoRef.current?.parentElement?.parentElement;
+    if (!container) return;
+    if (!document.fullscreenElement) {
+      container.requestFullscreen();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
     }
+  }
 
-    function handleSeek(e) {
-        const video = videoRef.current;
-        if (!video || !video.duration) return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        const pct = (e.clientX - rect.left) / rect.width;
-        video.currentTime = pct * video.duration;
+  async function togglePiP() {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else {
+        await video.requestPictureInPicture();
+      }
+    } catch (err) {
+      console.log("PiP not supported:", err);
     }
+  }
 
-    function toggleFullscreen() {
-        const container = videoRef.current?.parentElement?.parentElement;
-        if (!container) return;
-        if (!document.fullscreenElement) {
-            container.requestFullscreen();
-            setIsFullscreen(true);
-        } else {
-            document.exitFullscreen();
-            setIsFullscreen(false);
-        }
-    }
+  function formatTime(seconds) {
+    if (!seconds || isNaN(seconds)) return "0:00";
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
 
-    async function togglePiP() {
-        const video = videoRef.current;
-        if (!video) return;
-        try {
-            if (document.pictureInPictureElement) {
-                await document.exitPictureInPicture();
-            } else {
-                await video.requestPictureInPicture();
-            }
-        } catch (err) {
-            console.log("PiP not supported:", err);
-        }
-    }
+  function handleMouseMove() {
+    setShowControls(true);
+    clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => {
+      if (isPlaying) setShowControls(false);
+    }, 3000);
+  }
 
-    function formatTime(seconds) {
-        if (!seconds || isNaN(seconds)) return "0:00";
-        const m = Math.floor(seconds / 60);
-        const s = Math.floor(seconds % 60);
-        return `${m}:${s.toString().padStart(2, "0")}`;
-    }
+  return (
+    <div
+      className={`sovereign-player ${isAudioOnly ? "audio-only" : ""}`}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => isPlaying && setShowControls(false)}
+    >
+      {/* Video Element */}
+      <video
+        ref={videoRef}
+        className="player-video"
+        poster={posterUrl}
+        onTimeUpdate={handleTimeUpdate}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onClick={togglePlay}
+        playsInline
+      />
 
-    function handleMouseMove() {
-        setShowControls(true);
-        clearTimeout(hideTimer.current);
-        hideTimer.current = setTimeout(() => {
-            if (isPlaying) setShowControls(false);
-        }, 3000);
-    }
+      {/* Audio-Only Visual */}
+      {isAudioOnly && (
+        <div className="audio-visual">
+          <div className="audio-icon">☦</div>
+          <div className="waveform">
+            {[...Array(12)].map((_, i) => (
+              <div key={i} className="waveform-bar" />
+            ))}
+          </div>
+          <p className="audio-label">Audio-Only Mode</p>
+        </div>
+      )}
 
-    return (
-        <div
-            className={`sovereign-player ${isAudioOnly ? "audio-only" : ""}`}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={() => isPlaying && setShowControls(false)}
+      {/* Sync Overlay children (bilingual text) */}
+      {children}
+
+      {/* Patristic AI Subtitle Overlay */}
+      <SubtitleOverlay
+        streamId={streamId || "stream-phanar-001"}
+        enabled={subtitlesEnabled}
+        onClose={() => setSubtitlesEnabled(false)}
+        autoEnable={autoSubtitles}
+        streamTier={streamTier}
+      />
+
+      {/* Custom Controls */}
+      <div className={`player-controls ${showControls ? "visible" : ""}`}>
+        <button className="player-btn" onClick={togglePlay} title={isPlaying ? "Pause" : "Play"}>
+          {isPlaying ? "⏸" : "▶"}
+        </button>
+
+        <div className="player-progress" onClick={handleSeek}>
+          <div className="player-progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+
+        <span className="player-time">
+          {formatTime((progress / 100) * duration)} / {formatTime(duration)}
+        </span>
+
+        <button className="player-btn" onClick={toggleMute} title={isMuted ? "Unmute" : "Mute"}>
+          {isMuted ? "🔇" : "🔊"}
+        </button>
+
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          value={volume}
+          onChange={handleVolumeChange}
+          className="player-volume"
+        />
+
+        <button className="player-btn" onClick={togglePiP} title="Picture-in-Picture">
+          📌
+        </button>
+
+        <button
+          className={`player-btn ${subtitlesEnabled ? "player-btn--active" : ""}`}
+          onClick={() => setSubtitlesEnabled(!subtitlesEnabled)}
+          title={subtitlesEnabled ? "Hide Subtitles" : "Patristic AI Subtitles"}
         >
-            {/* Video Element */}
-            <video
-                ref={videoRef}
-                className="player-video"
-                poster={posterUrl}
-                onTimeUpdate={handleTimeUpdate}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onClick={togglePlay}
-                playsInline
-            />
+          CC
+        </button>
 
-            {/* Audio-Only Visual */}
-            {isAudioOnly && (
-                <div className="audio-visual">
-                    <div className="audio-icon">☦</div>
-                    <div className="waveform">
-                        {[...Array(12)].map((_, i) => (
-                            <div key={i} className="waveform-bar" />
-                        ))}
-                    </div>
-                    <p className="audio-label">Audio-Only Mode</p>
-                </div>
-            )}
+        <button className="player-btn" onClick={toggleFullscreen} title="Fullscreen">
+          {isFullscreen ? "⬜" : "⛶"}
+        </button>
+      </div>
 
-            {/* Sync Overlay children (bilingual text) */}
-            {children}
+      {/* No-play overlay */}
+      {!isPlaying && !src && (
+        <div className="player-placeholder">
+          <div className="player-placeholder-icon">☦</div>
+          <p>Select a stream from the Global Map</p>
+        </div>
+      )}
 
-            {/* Custom Controls */}
-            <div className={`player-controls ${showControls ? "visible" : ""}`}>
-                <button className="player-btn" onClick={togglePlay} title={isPlaying ? "Pause" : "Play"}>
-                    {isPlaying ? "⏸" : "▶"}
-                </button>
-
-                <div className="player-progress" onClick={handleSeek}>
-                    <div className="player-progress-fill" style={{ width: `${progress}%` }} />
-                </div>
-
-                <span className="player-time">
-                    {formatTime((progress / 100) * duration)} / {formatTime(duration)}
-                </span>
-
-                <button className="player-btn" onClick={toggleMute} title={isMuted ? "Unmute" : "Mute"}>
-                    {isMuted ? "🔇" : "🔊"}
-                </button>
-
-                <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={volume}
-                    onChange={handleVolumeChange}
-                    className="player-volume"
-                />
-
-                <button className="player-btn" onClick={togglePiP} title="Picture-in-Picture">
-                    📌
-                </button>
-
-                <button className="player-btn" onClick={toggleFullscreen} title="Fullscreen">
-                    {isFullscreen ? "⬜" : "⛶"}
-                </button>
-            </div>
-
-            {/* No-play overlay */}
-            {!isPlaying && !src && (
-                <div className="player-placeholder">
-                    <div className="player-placeholder-icon">☦</div>
-                    <p>Select a stream from the Global Map</p>
-                </div>
-            )}
-
-            <style jsx>{`
+      <style jsx>{`
         .sovereign-player {
           position: relative;
           width: 100%;
@@ -362,6 +384,6 @@ export default function SovereignPlayer({
           }
         }
       `}</style>
-        </div>
-    );
+    </div>
+  );
 }

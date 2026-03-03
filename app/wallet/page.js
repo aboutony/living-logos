@@ -5,11 +5,20 @@ import SpiritualWallet from "../components/SpiritualWallet";
 
 /**
  * Spiritual Wallet — Self-Sovereign Identity + Stewardship History
- * Phase Two: Shows candles lit, parishes supported, and total given.
+ * Directive 010: DID persistence via localStorage
  */
 export default function WalletPage() {
     const [history, setHistory] = useState(null);
     const [loadingHistory, setLoadingHistory] = useState(true);
+    const [didPersisted, setDidPersisted] = useState(false);
+
+    // Directive 010: DID persistence
+    useEffect(() => {
+        const storedDid = localStorage.getItem("ll-did");
+        if (storedDid) {
+            setDidPersisted(true);
+        }
+    }, []);
 
     useEffect(() => {
         async function fetchHistory() {
@@ -37,6 +46,12 @@ export default function WalletPage() {
                     <h1 className="heading-hero" style={{ fontSize: "var(--text-3xl)" }}>
                         Spiritual Wallet
                     </h1>
+                    {didPersisted && (
+                        <div className="did-persisted-badge">
+                            <span>🔐</span>
+                            <span>DID Persisted</span>
+                        </div>
+                    )}
                     <p className="text-secondary" style={{ maxWidth: 600, margin: "12px auto 0", textAlign: "center", fontSize: "var(--text-sm)" }}>
                         Your identity is sovereign. Protected by Decentralized Identifiers (DID) and
                         Verifiable Credentials — providing Confessional-level privacy.

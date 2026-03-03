@@ -112,6 +112,9 @@ function WatchContent() {
         <SovereignPlayer
           src={null}
           isAudioOnly={isAudioOnly}
+          streamId={stream?.id}
+          autoSubtitles={stream?.authority?.level <= 2}
+          streamTier={stream?.authority?.level}
         >
           {showSync && <SyncOverlay isVisible={showSync} currentTime={currentTime} />}
         </SovereignPlayer>

@@ -24,6 +24,8 @@ const BOTTOM_TABS = [
 const DRAWER_LINKS = [
     { href: "/", label: "Global Map", icon: "🌍" },
     { href: "/watch", label: "Live Now", icon: "📡" },
+    { href: "/newsroom", label: "Newsroom", icon: "🎙️" },
+    { href: "/broadcaster", label: "Broadcaster", icon: "📊" },
     { href: "/schedule", label: "Schedule", icon: "📅" },
     { href: "/wallet", label: "Wallet", icon: "🔐" },
     { href: "/library", label: "Library", icon: "📚" },

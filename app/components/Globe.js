@@ -91,16 +91,26 @@ export default function Globe({ streams = [], onSelectStream }) {
                         if (onSelectStream) onSelectStream(point);
                     });
 
-                // — Rings (pulse) for live streams —
+                // — Rings (pulse) for live streams + permanent Gold Pulse for Tier 1 —
                 const liveStreams = streams.filter((s) => s.isLive);
+                const pinnedStreams = streams.filter((s) => s.pinned || s.authority?.level === 1);
+                // Combine: pinned streams always pulse, plus any live non-pinned
+                const ringStreams = [
+                    ...pinnedStreams.map((s) => ({ ...s, _pinned: true })),
+                    ...liveStreams.filter((s) => !s.pinned && s.authority?.level !== 1).map((s) => ({ ...s, _pinned: false })),
+                ];
                 globe
-                    .ringsData(liveStreams)
+                    .ringsData(ringStreams)
                     .ringLat((d) => d.lat)
                     .ringLng((d) => d.lng)
-                    .ringColor(() => () => "rgba(212, 168, 83, 0.35)")
-                    .ringMaxRadius(3)
-                    .ringPropagationSpeed(1.5)
-                    .ringRepeatPeriod(2000);
+                    .ringColor((d) => () =>
+                        d._pinned
+                            ? "rgba(240, 199, 94, 0.50)"  // Gold Pulse — Tier 1
+                            : "rgba(212, 168, 83, 0.35)"  // Standard live pulse
+                    )
+                    .ringMaxRadius((d) => d._pinned ? 5 : 3)
+                    .ringPropagationSpeed((d) => d._pinned ? 2.5 : 1.5)
+                    .ringRepeatPeriod((d) => d._pinned ? 1200 : 2000);
 
                 // — Initial camera angle —
                 globe.pointOfView({ lat: 35, lng: 25, altitude: 2.2 }, 1000);
@@ -158,7 +168,12 @@ export default function Globe({ streams = [], onSelectStream }) {
         globe.pointsData(streams);
 
         const liveStreams = streams.filter((s) => s.isLive);
-        globe.ringsData(liveStreams);
+        const pinnedStreams = streams.filter((s) => s.pinned || s.authority?.level === 1);
+        const ringStreams = [
+            ...pinnedStreams.map((s) => ({ ...s, _pinned: true })),
+            ...liveStreams.filter((s) => !s.pinned && s.authority?.level !== 1).map((s) => ({ ...s, _pinned: false })),
+        ];
+        globe.ringsData(ringStreams);
     }, [streams]);
 
     return (

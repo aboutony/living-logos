@@ -7,132 +7,141 @@ import { useState, useEffect } from "react";
  * Displays DID, Verifiable Credentials, and privacy controls.
  */
 export default function SpiritualWallet() {
-    const [wallet, setWallet] = useState(null);
-    const [credentials, setCredentials] = useState([]);
+  const [wallet, setWallet] = useState(null);
+  const [credentials, setCredentials] = useState([]);
 
-    useEffect(() => {
-        // Generate SSI profile on mount (client-side only)
-        import("@/lib/ssi").then(({ generateDID, createVerifiableCredential }) => {
-            const did = generateDID("Faithful Servant");
-            setWallet(did);
+  useEffect(() => {
+    // Generate SSI profile on mount (client-side only)
+    // Directive 010: Persist DID in localStorage
+    import("@/lib/ssi").then(({ generateDID, createVerifiableCredential }) => {
+      let did;
+      const storedDid = localStorage.getItem("ll-did");
+      if (storedDid) {
+        try { did = JSON.parse(storedDid); } catch { did = null; }
+      }
+      if (!did) {
+        did = generateDID("Faithful Servant");
+        localStorage.setItem("ll-did", JSON.stringify(did));
+      }
+      setWallet(did);
 
-            // Create sample Verifiable Credentials
-            const creds = [
-                createVerifiableCredential("Baptism", {
-                    did: did.id,
-                    name: "Faithful Servant",
-                    parish: "Holy Trinity Cathedral, NYC",
-                    authority: "Tier 2 — Archdiocesan",
-                }),
-                createVerifiableCredential("Chrismation", {
-                    did: did.id,
-                    name: "Faithful Servant",
-                    parish: "Holy Trinity Cathedral, NYC",
-                    authority: "Tier 2 — Archdiocesan",
-                }),
-                createVerifiableCredential("ParishMembership", {
-                    did: did.id,
-                    name: "Faithful Servant",
-                    parish: "Holy Trinity Cathedral, NYC",
-                    authority: "Tier 3 — Local Parish",
-                }),
-            ];
-            setCredentials(creds);
-        });
-    }, []);
+      // Create sample Verifiable Credentials
+      const creds = [
+        createVerifiableCredential("Baptism", {
+          did: did.id,
+          name: "Faithful Servant",
+          parish: "Holy Trinity Cathedral, NYC",
+          authority: "Tier 2 — Archdiocesan",
+        }),
+        createVerifiableCredential("Chrismation", {
+          did: did.id,
+          name: "Faithful Servant",
+          parish: "Holy Trinity Cathedral, NYC",
+          authority: "Tier 2 — Archdiocesan",
+        }),
+        createVerifiableCredential("ParishMembership", {
+          did: did.id,
+          name: "Faithful Servant",
+          parish: "Holy Trinity Cathedral, NYC",
+          authority: "Tier 3 — Local Parish",
+        }),
+      ];
+      setCredentials(creds);
+    });
+  }, []);
 
-    if (!wallet) {
-        return (
-            <div className="wallet-loading">
-                <div className="skeleton" style={{ width: "100%", height: 200 }} />
-            </div>
-        );
-    }
-
+  if (!wallet) {
     return (
-        <div className="spiritual-wallet">
-            {/* DID Profile */}
-            <div className="wallet-profile card-glass">
-                <div className="wallet-avatar">
-                    <span>☦</span>
-                </div>
-                <div className="wallet-info">
-                    <h2 className="heading-card">{wallet.displayName}</h2>
-                    <p className="wallet-did">{wallet.id}</p>
-                    <div className="wallet-badges">
-                        <span className="badge badge-verified">🔐 Sovereign Identity</span>
-                        <span className="badge badge-gold">Confessional Privacy</span>
-                    </div>
-                </div>
-            </div>
+      <div className="wallet-loading">
+        <div className="skeleton" style={{ width: "100%", height: 200 }} />
+      </div>
+    );
+  }
 
-            {/* Privacy Status */}
-            <div className="wallet-privacy card-flat">
-                <h3 className="heading-card">🛡️ Data Sovereignty</h3>
-                <div className="privacy-grid">
-                    <div className="privacy-item">
-                        <span className="privacy-icon">✓</span>
-                        <span>Decentralized Identifier (DID)</span>
-                    </div>
-                    <div className="privacy-item">
-                        <span className="privacy-icon">✓</span>
-                        <span>Zero third-party data sharing</span>
-                    </div>
-                    <div className="privacy-item">
-                        <span className="privacy-icon">✓</span>
-                        <span>No secular analytics or tracking</span>
-                    </div>
-                    <div className="privacy-item">
-                        <span className="privacy-icon">✓</span>
-                        <span>Confessional-level encryption</span>
-                    </div>
-                    <div className="privacy-item">
-                        <span className="privacy-icon">✓</span>
-                        <span>Self-sovereign data ownership</span>
-                    </div>
-                    <div className="privacy-item">
-                        <span className="privacy-icon">✓</span>
-                        <span>No algorithm-driven profiling</span>
-                    </div>
-                </div>
-            </div>
+  return (
+    <div className="spiritual-wallet">
+      {/* DID Profile */}
+      <div className="wallet-profile card-glass">
+        <div className="wallet-avatar">
+          <span>☦</span>
+        </div>
+        <div className="wallet-info">
+          <h2 className="heading-card">{wallet.displayName}</h2>
+          <p className="wallet-did">{wallet.id}</p>
+          <div className="wallet-badges">
+            <span className="badge badge-verified">🔐 Sovereign Identity</span>
+            <span className="badge badge-gold">Confessional Privacy</span>
+          </div>
+        </div>
+      </div>
 
-            {/* Verifiable Credentials */}
-            <div className="wallet-credentials">
-                <h3 className="heading-card" style={{ marginBottom: "var(--space-md)" }}>
-                    📜 Verifiable Credentials
-                </h3>
-                <div className="credentials-grid">
-                    {credentials.map((vc, i) => (
-                        <div key={i} className={`credential-card card animate-fade-in-up animate-delay-${i + 1}`}>
-                            <div className="credential-type">
-                                {vc.type[1].replace("Credential", "")}
-                            </div>
-                            <div className="credential-detail">
-                                <span className="label">Issued By</span>
-                                <span>{vc.issuer.name}</span>
-                            </div>
-                            <div className="credential-detail">
-                                <span className="label">Subject</span>
-                                <span>{vc.credentialSubject.name}</span>
-                            </div>
-                            <div className="credential-detail">
-                                <span className="label">Parish</span>
-                                <span>{vc.credentialSubject.parish || "—"}</span>
-                            </div>
-                            <div className="credential-detail">
-                                <span className="label">Authority</span>
-                                <span>{vc.credentialSubject.authority}</span>
-                            </div>
-                            <div className="credential-seal">
-                                <span>✦</span> Verified Credential
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
+      {/* Privacy Status */}
+      <div className="wallet-privacy card-flat">
+        <h3 className="heading-card">🛡️ Data Sovereignty</h3>
+        <div className="privacy-grid">
+          <div className="privacy-item">
+            <span className="privacy-icon">✓</span>
+            <span>Decentralized Identifier (DID)</span>
+          </div>
+          <div className="privacy-item">
+            <span className="privacy-icon">✓</span>
+            <span>Zero third-party data sharing</span>
+          </div>
+          <div className="privacy-item">
+            <span className="privacy-icon">✓</span>
+            <span>No secular analytics or tracking</span>
+          </div>
+          <div className="privacy-item">
+            <span className="privacy-icon">✓</span>
+            <span>Confessional-level encryption</span>
+          </div>
+          <div className="privacy-item">
+            <span className="privacy-icon">✓</span>
+            <span>Self-sovereign data ownership</span>
+          </div>
+          <div className="privacy-item">
+            <span className="privacy-icon">✓</span>
+            <span>No algorithm-driven profiling</span>
+          </div>
+        </div>
+      </div>
 
-            <style jsx>{`
+      {/* Verifiable Credentials */}
+      <div className="wallet-credentials">
+        <h3 className="heading-card" style={{ marginBottom: "var(--space-md)" }}>
+          📜 Verifiable Credentials
+        </h3>
+        <div className="credentials-grid">
+          {credentials.map((vc, i) => (
+            <div key={i} className={`credential-card card animate-fade-in-up animate-delay-${i + 1}`}>
+              <div className="credential-type">
+                {vc.type[1].replace("Credential", "")}
+              </div>
+              <div className="credential-detail">
+                <span className="label">Issued By</span>
+                <span>{vc.issuer.name}</span>
+              </div>
+              <div className="credential-detail">
+                <span className="label">Subject</span>
+                <span>{vc.credentialSubject.name}</span>
+              </div>
+              <div className="credential-detail">
+                <span className="label">Parish</span>
+                <span>{vc.credentialSubject.parish || "—"}</span>
+              </div>
+              <div className="credential-detail">
+                <span className="label">Authority</span>
+                <span>{vc.credentialSubject.authority}</span>
+              </div>
+              <div className="credential-seal">
+                <span>✦</span> Verified Credential
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <style jsx>{`
         .spiritual-wallet {
           display: flex;
           flex-direction: column;
@@ -237,6 +246,6 @@ export default function SpiritualWallet() {
           .privacy-grid { grid-template-columns: 1fr; }
         }
       `}</style>
-        </div>
-    );
+    </div>
+  );
 }
