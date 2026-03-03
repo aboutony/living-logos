@@ -139,31 +139,52 @@ export default function SovereignPlayer({
       onMouseMove={handleMouseMove}
       onMouseLeave={() => isPlaying && setShowControls(false)}
     >
-      {/* YouTube Embed Mode */}
+      {/* YouTube Channel Mode */}
       {youtubeChannel ? (
         <div className="youtube-embed-wrap">
-          <iframe
-            className="youtube-embed-iframe"
-            src={`https://www.youtube-nocookie.com/embed/live_stream?channel=${youtubeChannel.handle?.replace('@', '')}&autoplay=0`}
-            title={`${youtubeChannel.name} — Live Stream`}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-            frameBorder="0"
-          />
-          <div className="youtube-channel-bar">
-            <div className="youtube-channel-info">
-              <span className="youtube-channel-name">☦ {youtubeChannel.name}</span>
-              <span className="youtube-channel-meta">
-                {youtubeChannel.subscribers?.toLocaleString()} subscribers · {youtubeChannel.videos} videos
+          <div className="youtube-channel-hero">
+            <div className="youtube-hero-icon">☦</div>
+            <h2 className="youtube-hero-title">{youtubeChannel.name}</h2>
+            <p className="youtube-hero-desc">{youtubeChannel.description}</p>
+            <div className="youtube-hero-stats">
+              <span className="youtube-hero-stat">
+                <strong>{youtubeChannel.subscribers?.toLocaleString()}</strong> subscribers
+              </span>
+              <span className="youtube-hero-divider">·</span>
+              <span className="youtube-hero-stat">
+                <strong>{youtubeChannel.videos}</strong> videos
               </span>
             </div>
+            {youtubeChannel.languages && (
+              <div className="youtube-hero-langs">
+                {youtubeChannel.languages.map((l) => (
+                  <span key={l} className="youtube-lang-pill">{l.toUpperCase()}</span>
+                ))}
+              </div>
+            )}
             <a
               href={`https://www.youtube.com/${youtubeChannel.handle}`}
               target="_blank"
               rel="noopener noreferrer"
+              className="youtube-hero-btn"
+            >
+              ▶ Watch on YouTube
+            </a>
+          </div>
+          <div className="youtube-channel-bar">
+            <div className="youtube-channel-info">
+              <span className="youtube-channel-name">☦ {youtubeChannel.name}</span>
+              <span className="youtube-channel-meta">
+                Sovereign relay · {youtubeChannel.videos} canonical videos
+              </span>
+            </div>
+            <a
+              href={`https://www.youtube.com/${youtubeChannel.handle}/live`}
+              target="_blank"
+              rel="noopener noreferrer"
               className="youtube-channel-link"
             >
-              View on YouTube ↗
+              🔴 Live ↗
             </a>
           </div>
         </div>
