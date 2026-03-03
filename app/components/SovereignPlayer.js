@@ -15,6 +15,7 @@ export default function SovereignPlayer({
   streamId,
   autoSubtitles = false,
   streamTier,
+  youtubeChannel,
   children,
 }) {
   const videoRef = useRef(null);
@@ -138,29 +139,61 @@ export default function SovereignPlayer({
       onMouseMove={handleMouseMove}
       onMouseLeave={() => isPlaying && setShowControls(false)}
     >
-      {/* Video Element */}
-      <video
-        ref={videoRef}
-        className="player-video"
-        poster={posterUrl}
-        onTimeUpdate={handleTimeUpdate}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onClick={togglePlay}
-        playsInline
-      />
-
-      {/* Audio-Only Visual */}
-      {isAudioOnly && (
-        <div className="audio-visual">
-          <div className="audio-icon">☦</div>
-          <div className="waveform">
-            {[...Array(12)].map((_, i) => (
-              <div key={i} className="waveform-bar" />
-            ))}
+      {/* YouTube Embed Mode */}
+      {youtubeChannel ? (
+        <div className="youtube-embed-wrap">
+          <iframe
+            className="youtube-embed-iframe"
+            src={`https://www.youtube-nocookie.com/embed/live_stream?channel=${youtubeChannel.handle?.replace('@', '')}&autoplay=0`}
+            title={`${youtubeChannel.name} — Live Stream`}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            frameBorder="0"
+          />
+          <div className="youtube-channel-bar">
+            <div className="youtube-channel-info">
+              <span className="youtube-channel-name">☦ {youtubeChannel.name}</span>
+              <span className="youtube-channel-meta">
+                {youtubeChannel.subscribers?.toLocaleString()} subscribers · {youtubeChannel.videos} videos
+              </span>
+            </div>
+            <a
+              href={`https://www.youtube.com/${youtubeChannel.handle}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="youtube-channel-link"
+            >
+              View on YouTube ↗
+            </a>
           </div>
-          <p className="audio-label">Audio-Only Mode</p>
         </div>
+      ) : (
+        <>
+          {/* Video Element */}
+          <video
+            ref={videoRef}
+            className="player-video"
+            poster={posterUrl}
+            onTimeUpdate={handleTimeUpdate}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onClick={togglePlay}
+            playsInline
+          />
+
+          {/* Audio-Only Visual */}
+          {isAudioOnly && (
+            <div className="audio-visual">
+              <div className="audio-icon">☦</div>
+              <div className="waveform">
+                {[...Array(12)].map((_, i) => (
+                  <div key={i} className="waveform-bar" />
+                ))}
+              </div>
+              <p className="audio-label">Audio-Only Mode</p>
+            </div>
+          )}
+        </>
       )}
 
       {/* Sync Overlay children (bilingual text) */}
