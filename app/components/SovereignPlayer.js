@@ -1,12 +1,16 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import SubtitleOverlay from "./SubtitleOverlay";
+import useAudioStreamCapture from "../hooks/useAudioStreamCapture";
 
 /**
  * YouTubePlayerMode — In-platform YouTube channel viewer.
  * Fetches the channel's video feed via /api/youtube/feed (RSS, no API key).
  * Embeds videos using youtube-nocookie.com for privacy.
+ *
+ * Directive 011: YouTube iframes are cross-origin, so internal audio capture
+ * is not available. SubtitleOverlay shows a notice about Sovereign Proxy.
  */
 function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubtitlesEnabled, autoSubtitles, streamTier }) {
   const [videos, setVideos] = useState([]);
@@ -70,13 +74,17 @@ function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubt
           allowFullScreen
           frameBorder="0"
         />
-        {/* Subtitle Overlay — renders on top of iframe */}
+        {/* Subtitle Overlay — Directive 011: YouTube mode, no internal audio available */}
         <SubtitleOverlay
           streamId={streamId || "stream-rumorthodox"}
           enabled={subtitlesEnabled}
           onClose={() => setSubtitlesEnabled(false)}
           autoEnable={autoSubtitles}
           streamTier={streamTier}
+          mediaStream={null}
+          captureError={null}
+          onStartCapture={() => { }}
+          isYouTubeMode={true}
         />
       </div>
 
@@ -117,6 +125,19 @@ function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubt
     </div>
   );
 }
+
+/**
+ * SovereignPlayer — Directive 011: Internal Audio Sovereignty
+ *
+ * The player now uses the Web Audio API to intercept the internal audio buffer
+ * from the <video> element. This MediaStream is passed to SubtitleOverlay
+ * for transcription WITHOUT any microphone access.
+ *
+ * Audio Routing:
+ *   <video> → MediaElementSourceNode → [split]
+ *     → AudioContext.destination (speakers)
+ *     → MediaStreamDestinationNode → SubtitleOverlay → /api/ai/transcribe
+ */
 export default function SovereignPlayer({
   src,
   posterUrl,
@@ -137,6 +158,15 @@ export default function SovereignPlayer({
   const [showControls, setShowControls] = useState(true);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(autoSubtitles);
   const hideTimer = useRef(null);
+
+  // ─── Directive 011: Internal Audio Capture ───
+  const {
+    captureStream,
+    isCapturing,
+    error: captureError,
+    startCapture,
+    stopCapture,
+  } = useAudioStreamCapture(videoRef);
 
   // Setup HLS if the src is an HLS manifest
   useEffect(() => {
@@ -270,6 +300,7 @@ export default function SovereignPlayer({
             onPause={() => setIsPlaying(false)}
             onClick={togglePlay}
             playsInline
+            crossOrigin="anonymous"
           />
 
           {/* Audio-Only Visual */}
@@ -282,6 +313,9 @@ export default function SovereignPlayer({
                 ))}
               </div>
               <p className="audio-label">Audio-Only Mode</p>
+              {subtitlesEnabled && (
+                <p className="audio-subtitle-active">📡 Subtitles Active — Internal Stream</p>
+              )}
             </div>
           )}
         </>
@@ -290,13 +324,17 @@ export default function SovereignPlayer({
       {/* Sync Overlay children (bilingual text) */}
       {children}
 
-      {/* Patristic AI Subtitle Overlay */}
+      {/* Patristic AI Subtitle Overlay — Directive 011: Internal Audio */}
       <SubtitleOverlay
         streamId={streamId || "stream-phanar-001"}
         enabled={subtitlesEnabled}
         onClose={() => setSubtitlesEnabled(false)}
         autoEnable={autoSubtitles}
         streamTier={streamTier}
+        mediaStream={captureStream}
+        captureError={captureError}
+        onStartCapture={startCapture}
+        isYouTubeMode={!!youtubeChannel}
       />
 
       {/* Custom Controls */}
@@ -334,10 +372,17 @@ export default function SovereignPlayer({
         <button
           className={`player-btn ${subtitlesEnabled ? "player-btn--active" : ""}`}
           onClick={() => setSubtitlesEnabled(!subtitlesEnabled)}
-          title={subtitlesEnabled ? "Hide Subtitles" : "Patristic AI Subtitles"}
+          title={subtitlesEnabled ? "Hide Subtitles" : "Patristic AI Subtitles (Internal Audio)"}
         >
           CC
         </button>
+
+        {/* Directive 011: Audio Capture Status */}
+        {subtitlesEnabled && (
+          <span className="player-capture-status" title="Internal audio capture — no microphone needed">
+            {isCapturing ? "📡" : "🚫🎙️"}
+          </span>
+        )}
 
         <button className="player-btn" onClick={toggleFullscreen} title="Fullscreen">
           {isFullscreen ? "⬜" : "⛶"}
@@ -396,6 +441,16 @@ export default function SovereignPlayer({
           text-transform: uppercase;
           letter-spacing: 0.1em;
         }
+        .audio-subtitle-active {
+          font-size: 11px;
+          color: var(--color-gold);
+          opacity: 0.8;
+          animation: subtitlePulse 2s ease-in-out infinite;
+        }
+        @keyframes subtitlePulse {
+          0%, 100% { opacity: 0.6; }
+          50% { opacity: 1; }
+        }
         .player-controls {
           position: absolute;
           bottom: 0;
@@ -434,6 +489,16 @@ export default function SovereignPlayer({
         }
         .player-btn:active {
           transform: scale(0.92);
+        }
+        .player-btn--active {
+          color: var(--color-gold);
+          opacity: 1;
+        }
+        .player-capture-status {
+          font-size: 14px;
+          display: flex;
+          align-items: center;
+          opacity: 0.7;
         }
         .player-progress {
           flex: 1;

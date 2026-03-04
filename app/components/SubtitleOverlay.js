@@ -3,42 +3,48 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Patristic AI Real-Time Auto-Translation
+ * SubtitleOverlay — Directive 011: Internal Audio Sovereignty
  *
- * Uses the browser's Web Speech API to listen to audio via microphone,
- * transcribe speech in real-time, and translate it through the Patristic AI
- * engine with Sacred Glossary enforcement.
+ * The "Ears of the Church" — Patristic AI Real-Time Auto-Translation
  *
- * Works with ANY audio source: YouTube, Facebook, live streams, audio files, etc.
+ * Processes INTERNAL digital audio streams from the Sovereign Player's
+ * audio buffer. NO microphone required. Works even when:
+ * - Microphone permission is DENIED
+ * - Device speakers are physically muted
+ * - User switches between Video/Audio-Only (Liquid Toggle)
+ *
+ * Audio flow:
+ *   <video> element → Web Audio API → MediaRecorder → /api/ai/transcribe
+ *   → transcript → /api/ai/translate → Patristic AI vetted subtitle
  */
 
 const LANGUAGES = [
-    { code: "el", name: "Greek", flag: "🇬🇷", speechCode: "el-GR" },
-    { code: "en", name: "English", flag: "🇬🇧", speechCode: "en-US" },
-    { code: "ar", name: "Arabic", flag: "🇱🇧", speechCode: "ar-SA" },
-    { code: "ru", name: "Russian", flag: "🇷🇺", speechCode: "ru-RU" },
-    { code: "ro", name: "Romanian", flag: "🇷🇴", speechCode: "ro-RO" },
-    { code: "sr", name: "Serbian", flag: "🇷🇸", speechCode: "sr-RS" },
-    { code: "bg", name: "Bulgarian", flag: "🇧🇬", speechCode: "bg-BG" },
-    { code: "tr", name: "Turkish", flag: "🇹🇷", speechCode: "tr-TR" },
-    { code: "ka", name: "Georgian", flag: "🇬🇪", speechCode: "ka-GE" },
-    { code: "fr", name: "French", flag: "🇫🇷", speechCode: "fr-FR" },
-    { code: "de", name: "German", flag: "🇩🇪", speechCode: "de-DE" },
-    { code: "it", name: "Italian", flag: "🇮🇹", speechCode: "it-IT" },
-    { code: "es", name: "Spanish", flag: "🇪🇸", speechCode: "es-ES" },
-    { code: "pt", name: "Portuguese", flag: "🇧🇷", speechCode: "pt-BR" },
-    { code: "no", name: "Norwegian", flag: "🇳🇴", speechCode: "nb-NO" },
-    { code: "sw", name: "Swahili", flag: "🇰🇪", speechCode: "sw-KE" },
-    { code: "am", name: "Amharic", flag: "🇪🇹", speechCode: "am-ET" },
-    { code: "zh", name: "Mandarin", flag: "🇨🇳", speechCode: "zh-CN" },
-    { code: "hi", name: "Hindi", flag: "🇮🇳", speechCode: "hi-IN" },
-    { code: "ja", name: "Japanese", flag: "🇯🇵", speechCode: "ja-JP" },
-    { code: "ko", name: "Korean", flag: "🇰🇷", speechCode: "ko-KR" },
-    { code: "fa", name: "Persian", flag: "🇮🇷", speechCode: "fa-IR" },
-    { code: "he", name: "Hebrew", flag: "🇮🇱", speechCode: "he-IL" },
-    { code: "ur", name: "Urdu", flag: "🇵🇰", speechCode: "ur-PK" },
-    { code: "id", name: "Indonesian", flag: "🇮🇩", speechCode: "id-ID" },
-    { code: "tl", name: "Tagalog", flag: "🇵🇭", speechCode: "fil-PH" },
+    { code: "el", name: "Greek", flag: "🇬🇷" },
+    { code: "en", name: "English", flag: "🇬🇧" },
+    { code: "ar", name: "Arabic", flag: "🇱🇧" },
+    { code: "ru", name: "Russian", flag: "🇷🇺" },
+    { code: "ro", name: "Romanian", flag: "🇷🇴" },
+    { code: "sr", name: "Serbian", flag: "🇷🇸" },
+    { code: "bg", name: "Bulgarian", flag: "🇧🇬" },
+    { code: "tr", name: "Turkish", flag: "🇹🇷" },
+    { code: "ka", name: "Georgian", flag: "🇬🇪" },
+    { code: "fr", name: "French", flag: "🇫🇷" },
+    { code: "de", name: "German", flag: "🇩🇪" },
+    { code: "it", name: "Italian", flag: "🇮🇹" },
+    { code: "es", name: "Spanish", flag: "🇪🇸" },
+    { code: "pt", name: "Portuguese", flag: "🇧🇷" },
+    { code: "no", name: "Norwegian", flag: "🇳🇴" },
+    { code: "sw", name: "Swahili", flag: "🇰🇪" },
+    { code: "am", name: "Amharic", flag: "🇪🇹" },
+    { code: "zh", name: "Mandarin", flag: "🇨🇳" },
+    { code: "hi", name: "Hindi", flag: "🇮🇳" },
+    { code: "ja", name: "Japanese", flag: "🇯🇵" },
+    { code: "ko", name: "Korean", flag: "🇰🇷" },
+    { code: "fa", name: "Persian", flag: "🇮🇷" },
+    { code: "he", name: "Hebrew", flag: "🇮🇱" },
+    { code: "ur", name: "Urdu", flag: "🇵🇰" },
+    { code: "id", name: "Indonesian", flag: "🇮🇩" },
+    { code: "tl", name: "Tagalog", flag: "🇵🇭" },
 ];
 
 function renderSubtitleText(text) {
@@ -52,21 +58,31 @@ function renderSubtitleText(text) {
     });
 }
 
-export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable, streamTier }) {
+export default function SubtitleOverlay({
+    streamId,
+    enabled,
+    onClose,
+    autoEnable,
+    streamTier,
+    mediaStream,       // Internal audio MediaStream from useAudioStreamCapture
+    captureError,      // Error from audio capture hook
+    onStartCapture,    // Callback to start audio capture
+    isYouTubeMode,     // Whether the player is in YouTube iframe mode
+}) {
     const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
-    const [isListening, setIsListening] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
     const [transcript, setTranscript] = useState("");
     const [translatedText, setTranslatedText] = useState("");
     const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
-    const [micError, setMicError] = useState(null);
-    const [statusText, setStatusText] = useState("Tap 🎙️ to start live translation");
+    const [statusText, setStatusText] = useState("📡 Initializing internal stream…");
+    const [streamError, setStreamError] = useState(null);
 
-    // Refs for stable callbacks (avoid stale closure bugs)
-    const listeningRef = useRef(false);
-    const recognitionRef = useRef(null);
+    const processingRef = useRef(false);
+    const recorderRef = useRef(null);
     const translateTimeout = useRef(null);
+    const captureIntervalRef = useRef(null);
     const sourceLangRef = useRef(sourceLang);
     const targetLangRef = useRef(targetLang);
 
@@ -74,10 +90,7 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
     useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
     useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
 
-    const isSpeechSupported = typeof window !== "undefined" &&
-        ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
-
-    // Translate via Patristic AI
+    // ─── Translate via Patristic AI ───
     const translateSpeech = useCallback(async (text) => {
         if (!text || text.length < 2) return;
         try {
@@ -96,165 +109,157 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                 setTranslatedText(data.translation.translatedText || text);
                 setSacredTermCount(data.translation.sacredTerms?.length || 0);
                 setVetted(data.translation.sacredTerms?.length > 0);
-                setStatusText("🔴 Live translating…");
+                setStatusText("📡 Live — Internal stream active");
             }
         } catch {
             // Silent fail
         }
     }, [streamId]);
 
-    // Create and start a new recognition instance
-    const startRecognition = useCallback(() => {
-        if (!isSpeechSupported) {
-            setMicError("Speech recognition not supported in this browser. Use Chrome or Edge.");
+    // ─── Transcribe audio chunk via server ───
+    const transcribeChunk = useCallback(async (audioBlob) => {
+        try {
+            const reader = new FileReader();
+            const base64Promise = new Promise((resolve) => {
+                reader.onloadend = () => resolve(reader.result.split(",")[1]);
+                reader.readAsDataURL(audioBlob);
+            });
+            const audioData = await base64Promise;
+
+            const res = await fetch("/api/ai/transcribe", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    audioData,
+                    format: "webm",
+                    sourceLang: sourceLangRef.current,
+                    streamId,
+                }),
+            });
+            const data = await res.json();
+            if (data.success && data.transcript) {
+                setTranscript(data.transcript);
+
+                // Trigger translation with debounce
+                clearTimeout(translateTimeout.current);
+                translateTimeout.current = setTimeout(() => {
+                    translateSpeech(data.transcript);
+                }, 200);
+            }
+        } catch {
+            // Silent fail — will retry on next chunk
+        }
+    }, [streamId, translateSpeech]);
+
+    // ─── Start/Stop Internal Stream Processing ───
+    const startProcessing = useCallback(() => {
+        if (processingRef.current) return;
+
+        // If no mediaStream yet, request capture from parent
+        if (!mediaStream) {
+            onStartCapture?.();
+            setStatusText("📡 Connecting to internal audio buffer…");
             return;
         }
 
-        // Stop any existing instance
-        if (recognitionRef.current) {
-            try { recognitionRef.current.abort(); } catch { }
-            recognitionRef.current = null;
-        }
-
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const recognition = new SpeechRecognition();
-
-        const langObj = LANGUAGES.find((l) => l.code === sourceLangRef.current);
-        recognition.lang = langObj?.speechCode || "el-GR";
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
-
-        recognition.onstart = () => {
-            setMicError(null);
-            setStatusText("🔴 Listening — speak or play audio…");
-        };
-
-        recognition.onresult = (event) => {
-            let interimTranscript = "";
-            let finalTranscript = "";
-
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                const t = event.results[i][0].transcript;
-                if (event.results[i].isFinal) {
-                    finalTranscript += t;
-                } else {
-                    interimTranscript += t;
-                }
-            }
-
-            const displayText = finalTranscript || interimTranscript;
-            if (displayText) {
-                setTranscript(displayText);
-                clearTimeout(translateTimeout.current);
-                const delay = finalTranscript ? 100 : 1200;
-                translateTimeout.current = setTimeout(() => {
-                    translateSpeech(displayText);
-                }, delay);
-            }
-        };
-
-        recognition.onerror = (event) => {
-            if (event.error === "no-speech") {
-                setStatusText("🔇 No speech detected — make sure audio is playing");
-                // Don't stop, it will auto-restart via onend
-            } else if (event.error === "not-allowed") {
-                setMicError("🎙️ Microphone access denied — please allow in browser settings");
-                listeningRef.current = false;
-                setIsListening(false);
-            } else if (event.error === "aborted") {
-                // Intentional stop, ignore
-            } else {
-                setStatusText(`⚠ ${event.error} — retrying…`);
-            }
-        };
-
-        recognition.onend = () => {
-            // Auto-restart if we're still supposed to be listening
-            // Using ref instead of state to avoid stale closure
-            if (listeningRef.current) {
-                setTimeout(() => {
-                    if (listeningRef.current) {
-                        try {
-                            startRecognition();
-                        } catch {
-                            listeningRef.current = false;
-                            setIsListening(false);
-                            setStatusText("Tap 🎙️ to restart");
-                        }
-                    }
-                }, 200);
-            }
-        };
-
         try {
-            recognition.start();
-            recognitionRef.current = recognition;
+            // Create MediaRecorder on the internal capture stream
+            const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+                ? "audio/webm;codecs=opus"
+                : "audio/webm";
+
+            const recorder = new MediaRecorder(mediaStream, {
+                mimeType,
+                audioBitsPerSecond: 16000,
+            });
+
+            recorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) {
+                    transcribeChunk(event.data);
+                }
+            };
+
+            recorder.onerror = () => {
+                setStreamError("Internal stream recording error");
+            };
+
+            // Record in 3-second chunks for real-time processing
+            recorder.start(3000);
+            recorderRef.current = recorder;
+            processingRef.current = true;
+            setIsProcessing(true);
+            setStreamError(null);
+            setStatusText("📡 Live — Processing internal audio stream");
         } catch (err) {
-            setMicError("Could not start speech recognition: " + err.message);
+            setStreamError("Failed to start stream processing: " + err.message);
         }
-    }, [isSpeechSupported, translateSpeech]);
+    }, [mediaStream, onStartCapture, transcribeChunk]);
 
-    // Toggle listening on/off
-    const toggleListening = useCallback(() => {
-        if (listeningRef.current) {
-            // Stop
-            listeningRef.current = false;
-            setIsListening(false);
-            if (recognitionRef.current) {
-                try { recognitionRef.current.abort(); } catch { }
-                recognitionRef.current = null;
-            }
-            setStatusText("Paused — tap 🎙️ to resume");
-        } else {
-            // Start
-            listeningRef.current = true;
-            setIsListening(true);
-            startRecognition();
+    const stopProcessing = useCallback(() => {
+        processingRef.current = false;
+        setIsProcessing(false);
+        if (recorderRef.current && recorderRef.current.state !== "inactive") {
+            try { recorderRef.current.stop(); } catch { }
         }
-    }, [startRecognition]);
+        recorderRef.current = null;
+        if (captureIntervalRef.current) {
+            clearInterval(captureIntervalRef.current);
+            captureIntervalRef.current = null;
+        }
+        setStatusText("📡 Stream paused");
+    }, []);
 
-    // Cleanup on unmount
+    // ─── Auto-start when enabled and mediaStream is available ───
+    useEffect(() => {
+        if (enabled && mediaStream && !processingRef.current) {
+            // Small delay to let audio context initialize
+            const timer = setTimeout(() => startProcessing(), 500);
+            return () => clearTimeout(timer);
+        }
+    }, [enabled, mediaStream, startProcessing]);
+
+    // ─── Auto-request capture when enabled ───
+    useEffect(() => {
+        if (enabled && !mediaStream && !isYouTubeMode) {
+            onStartCapture?.();
+        }
+    }, [enabled, mediaStream, isYouTubeMode, onStartCapture]);
+
+    // ─── Stop when overlay is disabled ───
+    useEffect(() => {
+        if (!enabled) {
+            stopProcessing();
+        }
+    }, [enabled, stopProcessing]);
+
+    // ─── Cleanup on unmount ───
     useEffect(() => {
         return () => {
-            listeningRef.current = false;
-            if (recognitionRef.current) {
-                try { recognitionRef.current.abort(); } catch { }
+            processingRef.current = false;
+            if (recorderRef.current && recorderRef.current.state !== "inactive") {
+                try { recorderRef.current.stop(); } catch { }
             }
             clearTimeout(translateTimeout.current);
+            if (captureIntervalRef.current) {
+                clearInterval(captureIntervalRef.current);
+            }
         };
     }, []);
 
-    // Stop when overlay is disabled
-    useEffect(() => {
-        if (!enabled) {
-            listeningRef.current = false;
-            if (recognitionRef.current) {
-                try { recognitionRef.current.abort(); } catch { }
-                recognitionRef.current = null;
-            }
-            setIsListening(false);
-        }
-    }, [enabled]);
-
-    // Restart recognition when source language changes while listening
-    useEffect(() => {
-        if (listeningRef.current) {
-            if (recognitionRef.current) {
-                try { recognitionRef.current.abort(); } catch { }
-            }
-            setTimeout(() => {
-                if (listeningRef.current) startRecognition();
-            }, 300);
-        }
-    }, [sourceLang, startRecognition]);
-
-    // Re-translate when target language changes
+    // ─── Re-translate when target language changes ───
     useEffect(() => {
         if (transcript) {
             translateSpeech(transcript);
         }
     }, [targetLang]);
+
+    // ─── Restart processing when source language changes ───
+    useEffect(() => {
+        if (processingRef.current && mediaStream) {
+            stopProcessing();
+            setTimeout(() => startProcessing(), 300);
+        }
+    }, [sourceLang]);
 
     if (!enabled) return null;
 
@@ -263,13 +268,18 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
             <div className="subtitle-overlay-inner">
                 {/* Controls Bar */}
                 <div className="subtitle-header">
-                    <button
-                        className={`subtitle-mic-btn ${isListening ? "active" : ""}`}
-                        onClick={toggleListening}
-                        title={isListening ? "Stop listening" : "Start live translation"}
+                    {/* Stream Status Indicator — replaces old mic button */}
+                    <div
+                        className={`subtitle-stream-indicator ${isProcessing ? "active" : ""}`}
+                        title={isProcessing ? "Internal stream active" : "Stream inactive"}
                     >
-                        {isListening ? "⏹" : "🎙️"}
-                    </button>
+                        <span className="subtitle-stream-icon">
+                            {isProcessing ? "📡" : "⏸"}
+                        </span>
+                        <span className="subtitle-stream-label">
+                            {isProcessing ? "LIVE" : "PAUSED"}
+                        </span>
+                    </div>
 
                     <div className="subtitle-lang-selector">
                         <label className="subtitle-lang-label">From</label>
@@ -320,13 +330,23 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                         </div>
                     )}
 
+                    {/* No-Mic Badge — Directive 011 sovereignty indicator */}
+                    <div className="subtitle-no-mic-badge" title="No microphone needed — internal stream">
+                        🚫🎙️
+                    </div>
+
                     <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
-                {/* Live Subtitle Display */}
+                {/* Live Subtitle Display — 2-Line Overlay */}
                 <div className="subtitle-cue-container">
-                    {micError ? (
-                        <div className="subtitle-error">{micError}</div>
+                    {isYouTubeMode && !mediaStream ? (
+                        <div className="subtitle-youtube-notice">
+                            <span className="subtitle-youtube-icon">⚠️</span>
+                            <span>YouTube cross-origin audio — subtitles via Sovereign Proxy (coming soon)</span>
+                        </div>
+                    ) : streamError || captureError ? (
+                        <div className="subtitle-error">{streamError || captureError}</div>
                     ) : translatedText ? (
                         <>
                             <div className="subtitle-original">{transcript}</div>
@@ -346,7 +366,72 @@ export default function SubtitleOverlay({ streamId, enabled, onClose, autoEnable
                         <div className="subtitle-status">{statusText}</div>
                     )}
                 </div>
+
+                {/* Sovereignty Badge */}
+                <div className="subtitle-sovereignty-badge">
+                    <span>🛡️ Internal Audio — No Microphone Required</span>
+                </div>
             </div>
+
+            <style jsx>{`
+                .subtitle-stream-indicator {
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    padding: 4px 10px;
+                    border-radius: var(--radius-full, 999px);
+                    background: rgba(255, 255, 255, 0.06);
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    font-size: 11px;
+                    transition: all 0.3s ease;
+                }
+                .subtitle-stream-indicator.active {
+                    background: rgba(220, 38, 38, 0.15);
+                    border-color: rgba(220, 38, 38, 0.4);
+                    animation: streamPulse 2s ease-in-out infinite;
+                }
+                .subtitle-stream-icon {
+                    font-size: 14px;
+                }
+                .subtitle-stream-label {
+                    font-weight: 700;
+                    font-size: 10px;
+                    letter-spacing: 0.08em;
+                    color: rgba(255, 255, 255, 0.9);
+                }
+                .subtitle-no-mic-badge {
+                    font-size: 12px;
+                    opacity: 0.7;
+                    cursor: help;
+                }
+                .subtitle-youtube-notice {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 12px;
+                    color: rgba(255, 200, 50, 0.9);
+                    padding: 8px 12px;
+                    background: rgba(255, 200, 50, 0.08);
+                    border-radius: 8px;
+                }
+                .subtitle-youtube-icon {
+                    font-size: 18px;
+                }
+                .subtitle-sovereignty-badge {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 4px 0;
+                    font-size: 9px;
+                    letter-spacing: 0.06em;
+                    color: rgba(212, 168, 83, 0.6);
+                    text-transform: uppercase;
+                }
+                @keyframes streamPulse {
+                    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+                    50% { box-shadow: 0 0 8px 2px rgba(220, 38, 38, 0.3); }
+                }
+            `}</style>
         </div>
     );
 }
