@@ -3,16 +3,16 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import SubtitleOverlay from "./SubtitleOverlay";
 import useAudioStreamCapture from "../hooks/useAudioStreamCapture";
+import useUserInteraction from "../hooks/useUserInteraction";
 
 /**
  * YouTubePlayerMode — In-platform YouTube channel viewer.
- * Fetches the channel's video feed via /api/youtube/feed (RSS, no API key).
- * Embeds videos using youtube-nocookie.com for privacy.
- *
- * Directive 011: YouTube iframes are cross-origin, so internal audio capture
- * is not available. SubtitleOverlay shows a notice about Sovereign Proxy.
+ * Directive 012: Auto-enables subtitles on first interaction.
  */
-function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubtitlesEnabled, autoSubtitles, streamTier }) {
+function YouTubePlayerMode({
+  youtubeChannel, streamId, subtitlesEnabled, setSubtitlesEnabled,
+  autoSubtitles, streamTier, hasInteracted
+}) {
   const [videos, setVideos] = useState([]);
   const [activeVideo, setActiveVideo] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -63,7 +63,6 @@ function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubt
 
   return (
     <div className="youtube-embed-wrap">
-      {/* Embedded Video Player */}
       <div className="youtube-iframe-container">
         <iframe
           key={activeVideo.videoId}
@@ -74,7 +73,7 @@ function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubt
           allowFullScreen
           frameBorder="0"
         />
-        {/* Subtitle Overlay — Directive 011: YouTube mode, no internal audio available */}
+        {/* Subtitle Overlay — YouTube mode with periodic transcription */}
         <SubtitleOverlay
           streamId={streamId || "stream-rumorthodox"}
           enabled={subtitlesEnabled}
@@ -85,6 +84,7 @@ function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubt
           captureError={null}
           onStartCapture={() => { }}
           isYouTubeMode={true}
+          hasInteracted={hasInteracted}
         />
       </div>
 
@@ -108,11 +108,7 @@ function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubt
                 className={`youtube-gallery-item ${v.videoId === activeVideo.videoId ? "active" : ""}`}
                 onClick={() => setActiveVideo(v)}
               >
-                <img
-                  src={v.thumbnail}
-                  alt={v.title}
-                  className="youtube-gallery-thumb"
-                />
+                <img src={v.thumbnail} alt={v.title} className="youtube-gallery-thumb" />
                 {v.videoId === activeVideo.videoId && (
                   <div className="youtube-gallery-playing">▶ Playing</div>
                 )}
@@ -127,16 +123,11 @@ function YouTubePlayerMode({ youtubeChannel, streamId, subtitlesEnabled, setSubt
 }
 
 /**
- * SovereignPlayer — Directive 011: Internal Audio Sovereignty
+ * SovereignPlayer — Directives 011 & 012
  *
- * The player now uses the Web Audio API to intercept the internal audio buffer
- * from the <video> element. This MediaStream is passed to SubtitleOverlay
- * for transcription WITHOUT any microphone access.
- *
- * Audio Routing:
- *   <video> → MediaElementSourceNode → [split]
- *     → AudioContext.destination (speakers)
- *     → MediaStreamDestinationNode → SubtitleOverlay → /api/ai/transcribe
+ * Directive 011: Internal audio buffer capture via Web Audio API
+ * Directive 012: Zero-click activation — auto-enables subtitles on first gesture
+ *               "Tap to Unmute Sanctuary" gold button if browser blocks audio
  */
 export default function SovereignPlayer({
   src,
@@ -159,20 +150,30 @@ export default function SovereignPlayer({
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(autoSubtitles);
   const hideTimer = useRef(null);
 
+  // ─── Directive 012: Global Interaction Listener ───
+  const { hasInteracted } = useUserInteraction();
+
   // ─── Directive 011: Internal Audio Capture ───
   const {
     captureStream,
     isCapturing,
     error: captureError,
+    needsInteraction,
     startCapture,
     stopCapture,
-  } = useAudioStreamCapture(videoRef);
+  } = useAudioStreamCapture(videoRef, hasInteracted);
 
-  // Setup HLS if the src is an HLS manifest
+  // ─── Directive 012: Auto-enable subtitles once user interacts ───
+  useEffect(() => {
+    if (hasInteracted && autoSubtitles && !subtitlesEnabled) {
+      setSubtitlesEnabled(true);
+    }
+  }, [hasInteracted, autoSubtitles]);
+
+  // Setup HLS
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
-
     if (src.endsWith(".m3u8")) {
       import("hls.js").then(({ default: Hls }) => {
         if (Hls.isSupported()) {
@@ -272,6 +273,14 @@ export default function SovereignPlayer({
     }, 3000);
   }
 
+  // Handle "Tap to Unmute Sanctuary" — satisfies browser gesture requirement
+  function handleUnmuteSanctuary() {
+    startCapture();
+    if (videoRef.current && videoRef.current.paused) {
+      videoRef.current.play().catch(() => { });
+    }
+  }
+
   return (
     <div
       className={`sovereign-player ${isAudioOnly ? "audio-only" : ""}`}
@@ -287,10 +296,10 @@ export default function SovereignPlayer({
           setSubtitlesEnabled={setSubtitlesEnabled}
           autoSubtitles={autoSubtitles}
           streamTier={streamTier}
+          hasInteracted={hasInteracted}
         />
       ) : (
         <>
-          {/* Video Element */}
           <video
             ref={videoRef}
             className="player-video"
@@ -303,7 +312,6 @@ export default function SovereignPlayer({
             crossOrigin="anonymous"
           />
 
-          {/* Audio-Only Visual */}
           {isAudioOnly && (
             <div className="audio-visual">
               <div className="audio-icon">☦</div>
@@ -318,24 +326,36 @@ export default function SovereignPlayer({
               )}
             </div>
           )}
+
+          {/* Directive 012: "Tap to Unmute Sanctuary" — gold center button */}
+          {needsInteraction && !hasInteracted && (
+            <div className="unmute-sanctuary-overlay">
+              <button className="unmute-sanctuary-btn" onClick={handleUnmuteSanctuary}>
+                <span className="unmute-sanctuary-icon">☦</span>
+                <span className="unmute-sanctuary-text">Tap to Unmute Sanctuary</span>
+              </button>
+            </div>
+          )}
         </>
       )}
 
-      {/* Sync Overlay children (bilingual text) */}
       {children}
 
-      {/* Patristic AI Subtitle Overlay — Directive 011: Internal Audio */}
-      <SubtitleOverlay
-        streamId={streamId || "stream-phanar-001"}
-        enabled={subtitlesEnabled}
-        onClose={() => setSubtitlesEnabled(false)}
-        autoEnable={autoSubtitles}
-        streamTier={streamTier}
-        mediaStream={captureStream}
-        captureError={captureError}
-        onStartCapture={startCapture}
-        isYouTubeMode={!!youtubeChannel}
-      />
+      {/* Patristic AI Subtitle Overlay — Directive 011+012 */}
+      {!youtubeChannel && (
+        <SubtitleOverlay
+          streamId={streamId || "stream-phanar-001"}
+          enabled={subtitlesEnabled}
+          onClose={() => setSubtitlesEnabled(false)}
+          autoEnable={autoSubtitles}
+          streamTier={streamTier}
+          mediaStream={captureStream}
+          captureError={captureError}
+          onStartCapture={startCapture}
+          isYouTubeMode={false}
+          hasInteracted={hasInteracted}
+        />
+      )}
 
       {/* Custom Controls */}
       <div className={`player-controls ${showControls ? "visible" : ""}`}>
@@ -356,12 +376,8 @@ export default function SovereignPlayer({
         </button>
 
         <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          value={volume}
-          onChange={handleVolumeChange}
+          type="range" min="0" max="1" step="0.05"
+          value={volume} onChange={handleVolumeChange}
           className="player-volume"
         />
 
@@ -372,15 +388,14 @@ export default function SovereignPlayer({
         <button
           className={`player-btn ${subtitlesEnabled ? "player-btn--active" : ""}`}
           onClick={() => setSubtitlesEnabled(!subtitlesEnabled)}
-          title={subtitlesEnabled ? "Hide Subtitles" : "Patristic AI Subtitles (Internal Audio)"}
+          title={subtitlesEnabled ? "Hide Subtitles" : "Patristic AI Subtitles"}
         >
           CC
         </button>
 
-        {/* Directive 011: Audio Capture Status */}
         {subtitlesEnabled && (
-          <span className="player-capture-status" title="Internal audio capture — no microphone needed">
-            {isCapturing ? "📡" : "🚫🎙️"}
+          <span className="player-capture-status" title="Internal audio — no microphone">
+            📡
           </span>
         )}
 
@@ -389,7 +404,6 @@ export default function SovereignPlayer({
         </button>
       </div>
 
-      {/* No-play overlay */}
       {!isPlaying && !src && (
         <div className="player-placeholder">
           <div className="player-placeholder-icon">☦</div>
@@ -451,6 +465,55 @@ export default function SovereignPlayer({
           0%, 100% { opacity: 0.6; }
           50% { opacity: 1; }
         }
+
+        /* ── Directive 012: Tap to Unmute Sanctuary ── */
+        .unmute-sanctuary-overlay {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.6);
+          z-index: 50;
+          backdrop-filter: blur(4px);
+        }
+        .unmute-sanctuary-btn {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 12px;
+          padding: 24px 40px;
+          background: linear-gradient(135deg, var(--color-gold) 0%, var(--color-gold-dim, #b8963a) 100%);
+          border: 2px solid rgba(255, 255, 255, 0.2);
+          border-radius: var(--radius-xl, 16px);
+          cursor: pointer;
+          transition: all 0.3s ease;
+          box-shadow: 0 8px 32px rgba(212, 168, 83, 0.4);
+          animation: sanctuaryPulse 2s ease-in-out infinite;
+        }
+        .unmute-sanctuary-btn:hover {
+          transform: scale(1.05);
+          box-shadow: 0 12px 48px rgba(212, 168, 83, 0.6);
+        }
+        .unmute-sanctuary-btn:active {
+          transform: scale(0.98);
+        }
+        .unmute-sanctuary-icon {
+          font-size: 48px;
+          color: var(--color-deep-navy, #0a1628);
+        }
+        .unmute-sanctuary-text {
+          font-size: 16px;
+          font-weight: 700;
+          color: var(--color-deep-navy, #0a1628);
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+        }
+        @keyframes sanctuaryPulse {
+          0%, 100% { box-shadow: 0 8px 32px rgba(212, 168, 83, 0.4); }
+          50% { box-shadow: 0 8px 48px rgba(212, 168, 83, 0.7); }
+        }
+
         .player-controls {
           position: absolute;
           bottom: 0;
@@ -570,6 +633,15 @@ export default function SovereignPlayer({
         @media (max-width: 480px) {
           .sovereign-player {
             border-radius: var(--radius-lg);
+          }
+          .unmute-sanctuary-btn {
+            padding: 20px 28px;
+          }
+          .unmute-sanctuary-icon {
+            font-size: 36px;
+          }
+          .unmute-sanctuary-text {
+            font-size: 13px;
           }
         }
       `}</style>

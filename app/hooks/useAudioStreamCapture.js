@@ -3,36 +3,34 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 
 /**
- * useAudioStreamCapture — Directive 011: Internal Audio Sovereignty
+ * useAudioStreamCapture — Directives 011 & 012
  *
  * Intercepts the internal audio buffer of a <video> or <audio> element
  * using the Web Audio API. Returns a MediaStream that represents the
  * decoded PCM audio — NO microphone needed.
  *
- * This works regardless of:
- * - Microphone permission (DENIED or never requested)
- * - Device speaker mute state
- * - OS volume settings
- *
- * The audio data flows:
- *   <video> element → MediaElementSourceNode → [split]
- *     → AudioContext.destination (speakers, so user still hears)
- *     → MediaStreamDestinationNode (capture stream for transcription)
+ * Directive 012 additions:
+ * - Accepts `hasInteracted` flag to auto-resume AudioContext
+ * - Auto-starts capture when interaction is detected
+ * - Exposes `needsInteraction` for UI feedback
  */
-export default function useAudioStreamCapture(mediaElementRef) {
+export default function useAudioStreamCapture(mediaElementRef, hasInteracted = false) {
     const [captureStream, setCaptureStream] = useState(null);
     const [isCapturing, setIsCapturing] = useState(false);
     const [error, setError] = useState(null);
+    const [needsInteraction, setNeedsInteraction] = useState(false);
 
     const audioCtxRef = useRef(null);
     const sourceNodeRef = useRef(null);
     const destinationRef = useRef(null);
     const connectedRef = useRef(false);
+    const pendingStartRef = useRef(false);
 
     const startCapture = useCallback(() => {
         const el = mediaElementRef?.current;
         if (!el) {
-            setError("No media element available");
+            // No element yet — mark pending so we try again when element is ready
+            pendingStartRef.current = true;
             return;
         }
 
@@ -52,13 +50,19 @@ export default function useAudioStreamCapture(mediaElementRef) {
 
             // Resume context if suspended (autoplay policy)
             if (ctx.state === "suspended") {
-                ctx.resume();
+                if (hasInteracted) {
+                    ctx.resume().catch(() => {
+                        setNeedsInteraction(true);
+                    });
+                } else {
+                    setNeedsInteraction(true);
+                    pendingStartRef.current = true;
+                    return;
+                }
             }
 
             // Create MediaElementSource (can only be called ONCE per element)
             if (!sourceNodeRef.current) {
-                // IMPORTANT: crossOrigin must be set on the element before creating source
-                // The element's audio will now be routed through Web Audio API
                 sourceNodeRef.current = ctx.createMediaElementSource(el);
                 connectedRef.current = true;
             }
@@ -78,19 +82,36 @@ export default function useAudioStreamCapture(mediaElementRef) {
 
             setCaptureStream(destination.stream);
             setIsCapturing(true);
+            setNeedsInteraction(false);
             setError(null);
+            pendingStartRef.current = false;
         } catch (err) {
             console.error("[AudioStreamCapture] Failed:", err);
             setError(err.message);
             setIsCapturing(false);
         }
-    }, [mediaElementRef, captureStream]);
+    }, [mediaElementRef, captureStream, hasInteracted]);
 
     const stopCapture = useCallback(() => {
         setIsCapturing(false);
-        // Don't destroy the nodes — they can be reused
-        // (createMediaElementSource can only be called once)
     }, []);
+
+    // Directive 012: Auto-resume when user interacts
+    useEffect(() => {
+        if (hasInteracted) {
+            setNeedsInteraction(false);
+
+            // Resume suspended AudioContext
+            if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
+                audioCtxRef.current.resume().catch(() => { });
+            }
+
+            // If we had a pending start, try now
+            if (pendingStartRef.current) {
+                startCapture();
+            }
+        }
+    }, [hasInteracted, startCapture]);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -110,15 +131,12 @@ export default function useAudioStreamCapture(mediaElementRef) {
     }, []);
 
     return {
-        /** The captured internal MediaStream (feed this to transcription) */
         captureStream,
-        /** Whether capture is actively running */
         isCapturing,
-        /** Any error that occurred during capture setup */
         error,
-        /** Start capturing internal audio */
+        /** Whether AudioContext is blocked waiting for user gesture */
+        needsInteraction,
         startCapture,
-        /** Stop capturing (does not destroy nodes for reuse) */
         stopCapture,
     };
 }

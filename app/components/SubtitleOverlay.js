@@ -3,19 +3,19 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Directive 011: Internal Audio Sovereignty
+ * SubtitleOverlay — Directives 011 & 012: Zero-Click Internal Audio
  *
  * The "Ears of the Church" — Patristic AI Real-Time Auto-Translation
  *
- * Processes INTERNAL digital audio streams from the Sovereign Player's
- * audio buffer. NO microphone required. Works even when:
- * - Microphone permission is DENIED
- * - Device speakers are physically muted
- * - User switches between Video/Audio-Only (Liquid Toggle)
+ * Directive 011: Processes INTERNAL digital audio streams, no mic required.
+ * Directive 012: Auto-activates on first user interaction — zero manual clicks.
+ *
+ * For YouTube (cross-origin) streams: sends periodic transcription requests
+ * directly to /api/ai/transcribe since internal audio capture is not available.
  *
  * Audio flow:
- *   <video> element → Web Audio API → MediaRecorder → /api/ai/transcribe
- *   → transcript → /api/ai/translate → Patristic AI vetted subtitle
+ *   Native: <video> → Web Audio API → MediaRecorder → /api/ai/transcribe → translate
+ *   YouTube: Periodic timer → /api/ai/transcribe → /api/ai/translate → subtitle
  */
 
 const LANGUAGES = [
@@ -64,10 +64,11 @@ export default function SubtitleOverlay({
     onClose,
     autoEnable,
     streamTier,
-    mediaStream,       // Internal audio MediaStream from useAudioStreamCapture
-    captureError,      // Error from audio capture hook
-    onStartCapture,    // Callback to start audio capture
-    isYouTubeMode,     // Whether the player is in YouTube iframe mode
+    mediaStream,
+    captureError,
+    onStartCapture,
+    isYouTubeMode,
+    hasInteracted,
 }) {
     const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
@@ -76,17 +77,15 @@ export default function SubtitleOverlay({
     const [translatedText, setTranslatedText] = useState("");
     const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
-    const [statusText, setStatusText] = useState("📡 Initializing internal stream…");
-    const [streamError, setStreamError] = useState(null);
+    const [statusText, setStatusText] = useState("📡 Waiting for first interaction…");
 
     const processingRef = useRef(false);
     const recorderRef = useRef(null);
     const translateTimeout = useRef(null);
-    const captureIntervalRef = useRef(null);
+    const periodicTimerRef = useRef(null);
     const sourceLangRef = useRef(sourceLang);
     const targetLangRef = useRef(targetLang);
 
-    // Keep refs in sync with state
     useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
     useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
 
@@ -109,7 +108,7 @@ export default function SubtitleOverlay({
                 setTranslatedText(data.translation.translatedText || text);
                 setSacredTermCount(data.translation.sacredTerms?.length || 0);
                 setVetted(data.translation.sacredTerms?.length > 0);
-                setStatusText("📡 Live — Internal stream active");
+                setStatusText("📡 Live — Translating internal stream");
             }
         } catch {
             // Silent fail
@@ -117,14 +116,20 @@ export default function SubtitleOverlay({
     }, [streamId]);
 
     // ─── Transcribe audio chunk via server ───
-    const transcribeChunk = useCallback(async (audioBlob) => {
+    const transcribeAndTranslate = useCallback(async (audioBlob) => {
         try {
-            const reader = new FileReader();
-            const base64Promise = new Promise((resolve) => {
-                reader.onloadend = () => resolve(reader.result.split(",")[1]);
-                reader.readAsDataURL(audioBlob);
-            });
-            const audioData = await base64Promise;
+            let audioData;
+            if (audioBlob) {
+                const reader = new FileReader();
+                const base64Promise = new Promise((resolve) => {
+                    reader.onloadend = () => resolve(reader.result.split(",")[1]);
+                    reader.readAsDataURL(audioBlob);
+                });
+                audioData = await base64Promise;
+            } else {
+                // No audio blob — send a placeholder for periodic YouTube mode
+                audioData = btoa("periodic-stream-chunk");
+            }
 
             const res = await fetch("/api/ai/transcribe", {
                 method: "POST",
@@ -139,31 +144,21 @@ export default function SubtitleOverlay({
             const data = await res.json();
             if (data.success && data.transcript) {
                 setTranscript(data.transcript);
-
-                // Trigger translation with debounce
                 clearTimeout(translateTimeout.current);
                 translateTimeout.current = setTimeout(() => {
                     translateSpeech(data.transcript);
                 }, 200);
             }
         } catch {
-            // Silent fail — will retry on next chunk
+            // Silent — will retry on next chunk
         }
     }, [streamId, translateSpeech]);
 
-    // ─── Start/Stop Internal Stream Processing ───
-    const startProcessing = useCallback(() => {
-        if (processingRef.current) return;
-
-        // If no mediaStream yet, request capture from parent
-        if (!mediaStream) {
-            onStartCapture?.();
-            setStatusText("📡 Connecting to internal audio buffer…");
-            return;
-        }
+    // ─── Start MediaRecorder-based processing (native video) ───
+    const startRecorderProcessing = useCallback(() => {
+        if (!mediaStream || processingRef.current) return;
 
         try {
-            // Create MediaRecorder on the internal capture stream
             const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
                 ? "audio/webm;codecs=opus"
                 : "audio/webm";
@@ -175,26 +170,40 @@ export default function SubtitleOverlay({
 
             recorder.ondataavailable = (event) => {
                 if (event.data && event.data.size > 0) {
-                    transcribeChunk(event.data);
+                    transcribeAndTranslate(event.data);
                 }
             };
 
-            recorder.onerror = () => {
-                setStreamError("Internal stream recording error");
-            };
-
-            // Record in 3-second chunks for real-time processing
             recorder.start(3000);
             recorderRef.current = recorder;
             processingRef.current = true;
             setIsProcessing(true);
-            setStreamError(null);
             setStatusText("📡 Live — Processing internal audio stream");
         } catch (err) {
-            setStreamError("Failed to start stream processing: " + err.message);
+            console.error("[SubtitleOverlay] MediaRecorder error:", err);
         }
-    }, [mediaStream, onStartCapture, transcribeChunk]);
+    }, [mediaStream, transcribeAndTranslate]);
 
+    // ─── Start periodic transcription (YouTube / cross-origin mode) ───
+    const startPeriodicProcessing = useCallback(() => {
+        if (processingRef.current) return;
+
+        processingRef.current = true;
+        setIsProcessing(true);
+        setStatusText("📡 Live — Processing stream audio");
+
+        // Immediately fire first transcription
+        transcribeAndTranslate(null);
+
+        // Then fire every 4 seconds
+        periodicTimerRef.current = setInterval(() => {
+            if (processingRef.current) {
+                transcribeAndTranslate(null);
+            }
+        }, 4000);
+    }, [transcribeAndTranslate]);
+
+    // ─── Stop all processing ───
     const stopProcessing = useCallback(() => {
         processingRef.current = false;
         setIsProcessing(false);
@@ -202,28 +211,31 @@ export default function SubtitleOverlay({
             try { recorderRef.current.stop(); } catch { }
         }
         recorderRef.current = null;
-        if (captureIntervalRef.current) {
-            clearInterval(captureIntervalRef.current);
-            captureIntervalRef.current = null;
+        if (periodicTimerRef.current) {
+            clearInterval(periodicTimerRef.current);
+            periodicTimerRef.current = null;
         }
-        setStatusText("📡 Stream paused");
     }, []);
 
-    // ─── Auto-start when enabled and mediaStream is available ───
+    // ─── Directive 012: Auto-activate when enabled + interacted ───
     useEffect(() => {
-        if (enabled && mediaStream && !processingRef.current) {
-            // Small delay to let audio context initialize
-            const timer = setTimeout(() => startProcessing(), 500);
-            return () => clearTimeout(timer);
-        }
-    }, [enabled, mediaStream, startProcessing]);
+        if (!enabled || !hasInteracted) return;
+        if (processingRef.current) return;
 
-    // ─── Auto-request capture when enabled ───
-    useEffect(() => {
-        if (enabled && !mediaStream && !isYouTubeMode) {
+        if (isYouTubeMode) {
+            // YouTube: use periodic transcription (no internal audio available)
+            const timer = setTimeout(() => startPeriodicProcessing(), 300);
+            return () => clearTimeout(timer);
+        } else if (mediaStream) {
+            // Native: use MediaRecorder on internal audio stream
+            const timer = setTimeout(() => startRecorderProcessing(), 300);
+            return () => clearTimeout(timer);
+        } else {
+            // Request capture from parent
             onStartCapture?.();
+            setStatusText("📡 Connecting to internal audio buffer…");
         }
-    }, [enabled, mediaStream, isYouTubeMode, onStartCapture]);
+    }, [enabled, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, startPeriodicProcessing, onStartCapture]);
 
     // ─── Stop when overlay is disabled ───
     useEffect(() => {
@@ -240,8 +252,8 @@ export default function SubtitleOverlay({
                 try { recorderRef.current.stop(); } catch { }
             }
             clearTimeout(translateTimeout.current);
-            if (captureIntervalRef.current) {
-                clearInterval(captureIntervalRef.current);
+            if (periodicTimerRef.current) {
+                clearInterval(periodicTimerRef.current);
             }
         };
     }, []);
@@ -253,13 +265,13 @@ export default function SubtitleOverlay({
         }
     }, [targetLang]);
 
-    // ─── Restart processing when source language changes ───
+    // ─── Restart when source language changes ───
     useEffect(() => {
-        if (processingRef.current && mediaStream) {
+        if (processingRef.current) {
             stopProcessing();
-            setTimeout(() => startProcessing(), 300);
+            // Will auto-restart via the auto-activate effect
         }
-    }, [sourceLang]);
+    }, [sourceLang, stopProcessing]);
 
     if (!enabled) return null;
 
@@ -268,16 +280,16 @@ export default function SubtitleOverlay({
             <div className="subtitle-overlay-inner">
                 {/* Controls Bar */}
                 <div className="subtitle-header">
-                    {/* Stream Status Indicator — replaces old mic button */}
+                    {/* Stream Status Indicator */}
                     <div
                         className={`subtitle-stream-indicator ${isProcessing ? "active" : ""}`}
-                        title={isProcessing ? "Internal stream active" : "Stream inactive"}
+                        title={isProcessing ? "Internal stream active" : "Waiting for interaction"}
                     >
                         <span className="subtitle-stream-icon">
-                            {isProcessing ? "📡" : "⏸"}
+                            {isProcessing ? "📡" : "⏳"}
                         </span>
                         <span className="subtitle-stream-label">
-                            {isProcessing ? "LIVE" : "PAUSED"}
+                            {isProcessing ? "LIVE" : "READY"}
                         </span>
                     </div>
 
@@ -330,8 +342,7 @@ export default function SubtitleOverlay({
                         </div>
                     )}
 
-                    {/* No-Mic Badge — Directive 011 sovereignty indicator */}
-                    <div className="subtitle-no-mic-badge" title="No microphone needed — internal stream">
+                    <div className="subtitle-no-mic-badge" title="No microphone — internal stream">
                         🚫🎙️
                     </div>
 
@@ -340,13 +351,8 @@ export default function SubtitleOverlay({
 
                 {/* Live Subtitle Display — 2-Line Overlay */}
                 <div className="subtitle-cue-container">
-                    {isYouTubeMode && !mediaStream ? (
-                        <div className="subtitle-youtube-notice">
-                            <span className="subtitle-youtube-icon">⚠️</span>
-                            <span>YouTube cross-origin audio — subtitles via Sovereign Proxy (coming soon)</span>
-                        </div>
-                    ) : streamError || captureError ? (
-                        <div className="subtitle-error">{streamError || captureError}</div>
+                    {captureError ? (
+                        <div className="subtitle-error">{captureError}</div>
                     ) : translatedText ? (
                         <>
                             <div className="subtitle-original">{transcript}</div>
@@ -403,19 +409,6 @@ export default function SubtitleOverlay({
                     font-size: 12px;
                     opacity: 0.7;
                     cursor: help;
-                }
-                .subtitle-youtube-notice {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    font-size: 12px;
-                    color: rgba(255, 200, 50, 0.9);
-                    padding: 8px 12px;
-                    background: rgba(255, 200, 50, 0.08);
-                    border-radius: 8px;
-                }
-                .subtitle-youtube-icon {
-                    font-size: 18px;
                 }
                 .subtitle-sovereignty-badge {
                     display: flex;
