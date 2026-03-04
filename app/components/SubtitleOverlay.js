@@ -3,25 +3,20 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Directives 011 & 012: Zero-Click Internal Audio
+ * SubtitleOverlay — Directives 011, 012 & 013
  *
- * The "Ears of the Church" — Patristic AI Real-Time Auto-Translation
+ * 011: Internal digital audio stream processing, no microphone
+ * 012: Zero-click activation on first user interaction
+ * 013: Real-Time Sync with timestamped cues + RTL auto-detection
  *
- * Directive 011: Processes INTERNAL digital audio streams, no mic required.
- * Directive 012: Auto-activates on first user interaction — zero manual clicks.
- *
- * For YouTube (cross-origin) streams: sends periodic transcription requests
- * directly to /api/ai/transcribe since internal audio capture is not available.
- *
- * Audio flow:
- *   Native: <video> → Web Audio API → MediaRecorder → /api/ai/transcribe → translate
- *   YouTube: Periodic timer → /api/ai/transcribe → /api/ai/translate → subtitle
+ * RTL Languages: Arabic (ar), Persian (fa), Hebrew (he), Urdu (ur)
+ * Automatically applies `direction: rtl` and `text-align: right` for these.
  */
 
 const LANGUAGES = [
     { code: "el", name: "Greek", flag: "🇬🇷" },
     { code: "en", name: "English", flag: "🇬🇧" },
-    { code: "ar", name: "Arabic", flag: "🇱🇧" },
+    { code: "ar", name: "Arabic", flag: "🇱🇧", rtl: true },
     { code: "ru", name: "Russian", flag: "🇷🇺" },
     { code: "ro", name: "Romanian", flag: "🇷🇴" },
     { code: "sr", name: "Serbian", flag: "🇷🇸" },
@@ -40,12 +35,14 @@ const LANGUAGES = [
     { code: "hi", name: "Hindi", flag: "🇮🇳" },
     { code: "ja", name: "Japanese", flag: "🇯🇵" },
     { code: "ko", name: "Korean", flag: "🇰🇷" },
-    { code: "fa", name: "Persian", flag: "🇮🇷" },
-    { code: "he", name: "Hebrew", flag: "🇮🇱" },
-    { code: "ur", name: "Urdu", flag: "🇵🇰" },
+    { code: "fa", name: "Persian", flag: "🇮🇷", rtl: true },
+    { code: "he", name: "Hebrew", flag: "🇮🇱", rtl: true },
+    { code: "ur", name: "Urdu", flag: "🇵🇰", rtl: true },
     { code: "id", name: "Indonesian", flag: "🇮🇩" },
     { code: "tl", name: "Tagalog", flag: "🇵🇭" },
 ];
+
+const RTL_CODES = new Set(["ar", "fa", "he", "ur"]);
 
 function renderSubtitleText(text) {
     if (!text) return null;
@@ -73,11 +70,14 @@ export default function SubtitleOverlay({
     const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
     const [isProcessing, setIsProcessing] = useState(false);
-    const [transcript, setTranscript] = useState("");
+    // Directive 013: Timestamped cue state
+    const [currentCue, setCurrentCue] = useState(null);
     const [translatedText, setTranslatedText] = useState("");
     const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
     const [statusText, setStatusText] = useState("📡 Waiting for first interaction…");
+    const [cueVisible, setCueVisible] = useState(false);
+    const [sceneDesc, setSceneDesc] = useState("");
 
     const processingRef = useRef(false);
     const recorderRef = useRef(null);
@@ -85,9 +85,15 @@ export default function SubtitleOverlay({
     const periodicTimerRef = useRef(null);
     const sourceLangRef = useRef(sourceLang);
     const targetLangRef = useRef(targetLang);
+    const cueTimerRef = useRef(null);
+    const lastCueIdRef = useRef(null);
 
     useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
     useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
+
+    // Directive 013: RTL detection
+    const isTargetRTL = RTL_CODES.has(targetLang);
+    const isSourceRTL = RTL_CODES.has(sourceLang);
 
     // ─── Translate via Patristic AI ───
     const translateSpeech = useCallback(async (text) => {
@@ -111,11 +117,39 @@ export default function SubtitleOverlay({
                 setStatusText("📡 Live — Translating internal stream");
             }
         } catch {
-            // Silent fail
+            // Silent fail — will retry on next cue
         }
     }, [streamId]);
 
-    // ─── Transcribe audio chunk via server ───
+    // ─── Directive 013: Process timestamped transcription cue ───
+    const processTranscriptionCue = useCallback((transcript, cue) => {
+        // Deduplicate: skip if same cue
+        if (cue && cue.id === lastCueIdRef.current) return;
+        if (cue) lastCueIdRef.current = cue.id;
+
+        // Fade in the new cue
+        setCueVisible(false);
+        setTimeout(() => {
+            setCurrentCue({ text: transcript, ...(cue || {}) });
+            if (cue?.scene) setSceneDesc(cue.scene);
+            setCueVisible(true);
+
+            // Auto-fade out after cue duration (or 5s default)
+            clearTimeout(cueTimerRef.current);
+            const displayDuration = (cue?.duration || 5) * 1000;
+            cueTimerRef.current = setTimeout(() => {
+                setCueVisible(false);
+            }, displayDuration - 500); // fade slightly before next cue
+        }, 150); // brief gap for fade transition
+
+        // Trigger translation
+        clearTimeout(translateTimeout.current);
+        translateTimeout.current = setTimeout(() => {
+            translateSpeech(transcript);
+        }, 100);
+    }, [translateSpeech]);
+
+    // ─── Transcribe (with timestamp support) ───
     const transcribeAndTranslate = useCallback(async (audioBlob) => {
         try {
             let audioData;
@@ -127,7 +161,6 @@ export default function SubtitleOverlay({
                 });
                 audioData = await base64Promise;
             } else {
-                // No audio blob — send a placeholder for periodic YouTube mode
                 audioData = btoa("periodic-stream-chunk");
             }
 
@@ -143,38 +176,25 @@ export default function SubtitleOverlay({
             });
             const data = await res.json();
             if (data.success && data.transcript) {
-                setTranscript(data.transcript);
-                clearTimeout(translateTimeout.current);
-                translateTimeout.current = setTimeout(() => {
-                    translateSpeech(data.transcript);
-                }, 200);
+                // Directive 013: Use timestamped cue
+                processTranscriptionCue(data.transcript, data.cue || null);
             }
         } catch {
             // Silent — will retry on next chunk
         }
-    }, [streamId, translateSpeech]);
+    }, [streamId, processTranscriptionCue]);
 
-    // ─── Start MediaRecorder-based processing (native video) ───
+    // ─── Start MediaRecorder (native video) ───
     const startRecorderProcessing = useCallback(() => {
         if (!mediaStream || processingRef.current) return;
-
         try {
             const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-                ? "audio/webm;codecs=opus"
-                : "audio/webm";
-
-            const recorder = new MediaRecorder(mediaStream, {
-                mimeType,
-                audioBitsPerSecond: 16000,
-            });
-
+                ? "audio/webm;codecs=opus" : "audio/webm";
+            const recorder = new MediaRecorder(mediaStream, { mimeType, audioBitsPerSecond: 16000 });
             recorder.ondataavailable = (event) => {
-                if (event.data && event.data.size > 0) {
-                    transcribeAndTranslate(event.data);
-                }
+                if (event.data && event.data.size > 0) transcribeAndTranslate(event.data);
             };
-
-            recorder.start(3000);
+            recorder.start(3000); // 3-second chunks for ≤3s latency
             recorderRef.current = recorder;
             processingRef.current = true;
             setIsProcessing(true);
@@ -184,22 +204,17 @@ export default function SubtitleOverlay({
         }
     }, [mediaStream, transcribeAndTranslate]);
 
-    // ─── Start periodic transcription (YouTube / cross-origin mode) ───
+    // ─── Start periodic transcription (YouTube / cross-origin) ───
     const startPeriodicProcessing = useCallback(() => {
         if (processingRef.current) return;
-
         processingRef.current = true;
         setIsProcessing(true);
         setStatusText("📡 Live — Processing stream audio");
 
-        // Immediately fire first transcription
+        // Fire immediately, then every 4 seconds
         transcribeAndTranslate(null);
-
-        // Then fire every 4 seconds
         periodicTimerRef.current = setInterval(() => {
-            if (processingRef.current) {
-                transcribeAndTranslate(null);
-            }
+            if (processingRef.current) transcribeAndTranslate(null);
         }, 4000);
     }, [transcribeAndTranslate]);
 
@@ -217,34 +232,27 @@ export default function SubtitleOverlay({
         }
     }, []);
 
-    // ─── Directive 012: Auto-activate when enabled + interacted ───
+    // ─── Auto-activate when enabled + interacted ───
     useEffect(() => {
         if (!enabled || !hasInteracted) return;
         if (processingRef.current) return;
 
         if (isYouTubeMode) {
-            // YouTube: use periodic transcription (no internal audio available)
             const timer = setTimeout(() => startPeriodicProcessing(), 300);
             return () => clearTimeout(timer);
         } else if (mediaStream) {
-            // Native: use MediaRecorder on internal audio stream
             const timer = setTimeout(() => startRecorderProcessing(), 300);
             return () => clearTimeout(timer);
         } else {
-            // Request capture from parent
             onStartCapture?.();
             setStatusText("📡 Connecting to internal audio buffer…");
         }
     }, [enabled, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, startPeriodicProcessing, onStartCapture]);
 
-    // ─── Stop when overlay is disabled ───
-    useEffect(() => {
-        if (!enabled) {
-            stopProcessing();
-        }
-    }, [enabled, stopProcessing]);
+    // ─── Stop when disabled ───
+    useEffect(() => { if (!enabled) stopProcessing(); }, [enabled, stopProcessing]);
 
-    // ─── Cleanup on unmount ───
+    // ─── Cleanup ───
     useEffect(() => {
         return () => {
             processingRef.current = false;
@@ -252,25 +260,19 @@ export default function SubtitleOverlay({
                 try { recorderRef.current.stop(); } catch { }
             }
             clearTimeout(translateTimeout.current);
-            if (periodicTimerRef.current) {
-                clearInterval(periodicTimerRef.current);
-            }
+            clearTimeout(cueTimerRef.current);
+            if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
         };
     }, []);
 
-    // ─── Re-translate when target language changes ───
+    // ─── Re-translate on target language change ───
     useEffect(() => {
-        if (transcript) {
-            translateSpeech(transcript);
-        }
+        if (currentCue?.text) translateSpeech(currentCue.text);
     }, [targetLang]);
 
-    // ─── Restart when source language changes ───
+    // ─── Restart processing on source language change ───
     useEffect(() => {
-        if (processingRef.current) {
-            stopProcessing();
-            // Will auto-restart via the auto-activate effect
-        }
+        if (processingRef.current) stopProcessing();
     }, [sourceLang, stopProcessing]);
 
     if (!enabled) return null;
@@ -280,17 +282,12 @@ export default function SubtitleOverlay({
             <div className="subtitle-overlay-inner">
                 {/* Controls Bar */}
                 <div className="subtitle-header">
-                    {/* Stream Status Indicator */}
                     <div
                         className={`subtitle-stream-indicator ${isProcessing ? "active" : ""}`}
                         title={isProcessing ? "Internal stream active" : "Waiting for interaction"}
                     >
-                        <span className="subtitle-stream-icon">
-                            {isProcessing ? "📡" : "⏳"}
-                        </span>
-                        <span className="subtitle-stream-label">
-                            {isProcessing ? "LIVE" : "READY"}
-                        </span>
+                        <span className="subtitle-stream-icon">{isProcessing ? "📡" : "⏳"}</span>
+                        <span className="subtitle-stream-label">{isProcessing ? "LIVE" : "READY"}</span>
                     </div>
 
                     <div className="subtitle-lang-selector">
@@ -301,9 +298,7 @@ export default function SubtitleOverlay({
                             className="subtitle-lang-dropdown"
                         >
                             {LANGUAGES.map((l) => (
-                                <option key={l.code} value={l.code}>
-                                    {l.flag} {l.name}
-                                </option>
+                                <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
                             ))}
                         </select>
                     </div>
@@ -318,9 +313,7 @@ export default function SubtitleOverlay({
                             className="subtitle-lang-dropdown"
                         >
                             {LANGUAGES.map((l) => (
-                                <option key={l.code} value={l.code}>
-                                    {l.flag} {l.name}
-                                </option>
+                                <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
                             ))}
                         </select>
                     </div>
@@ -331,42 +324,55 @@ export default function SubtitleOverlay({
                             <span className="vetting-badge-text">Vetted ✓</span>
                         </div>
                     )}
-
-                    <div className="glossary-lock-badge">
-                        <span>🔒</span>
-                    </div>
-
-                    {streamTier && (
-                        <div className={`subtitle-tier-badge tier-${streamTier}`}>
-                            T{streamTier}
-                        </div>
-                    )}
-
-                    <div className="subtitle-no-mic-badge" title="No microphone — internal stream">
-                        🚫🎙️
-                    </div>
-
+                    <div className="glossary-lock-badge"><span>🔒</span></div>
+                    {streamTier && <div className={`subtitle-tier-badge tier-${streamTier}`}>T{streamTier}</div>}
+                    <div className="subtitle-no-mic-badge" title="No microphone — internal stream">🚫🎙️</div>
                     <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
-                {/* Live Subtitle Display — 2-Line Overlay */}
-                <div className="subtitle-cue-container">
+                {/* Directive 013: Live Subtitle Display — Timestamped Cues + RTL */}
+                <div className={`subtitle-cue-container ${cueVisible ? "cue-visible" : "cue-hidden"}`}>
                     {captureError ? (
                         <div className="subtitle-error">{captureError}</div>
-                    ) : translatedText ? (
+                    ) : currentCue ? (
                         <>
-                            <div className="subtitle-original">{transcript}</div>
-                            <div className="subtitle-translated">{renderSubtitleText(translatedText)}</div>
-                            {sacredTermCount > 0 && (
-                                <div className="subtitle-sacred-note">
-                                    🔒 {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked
+                            {/* Original text (source language direction) */}
+                            <div
+                                className="subtitle-original"
+                                style={{
+                                    direction: isSourceRTL ? "rtl" : "ltr",
+                                    textAlign: isSourceRTL ? "right" : "left",
+                                }}
+                            >
+                                {currentCue.text}
+                            </div>
+
+                            {/* Translated text (target language direction) */}
+                            {translatedText ? (
+                                <div
+                                    className="subtitle-translated"
+                                    style={{
+                                        direction: isTargetRTL ? "rtl" : "ltr",
+                                        textAlign: isTargetRTL ? "right" : "left",
+                                    }}
+                                >
+                                    {renderSubtitleText(translatedText)}
                                 </div>
+                            ) : (
+                                <div className="subtitle-translated subtitle-translating">Translating…</div>
                             )}
-                        </>
-                    ) : transcript ? (
-                        <>
-                            <div className="subtitle-original">{transcript}</div>
-                            <div className="subtitle-translated subtitle-translating">Translating…</div>
+
+                            {/* Directive 013: Scene description + sacred term count */}
+                            <div className="subtitle-meta-row">
+                                {sceneDesc && (
+                                    <span className="subtitle-scene">🎬 {sceneDesc}</span>
+                                )}
+                                {sacredTermCount > 0 && (
+                                    <span className="subtitle-sacred-note">
+                                        🔒 {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked
+                                    </span>
+                                )}
+                            </div>
                         </>
                     ) : (
                         <div className="subtitle-status">{statusText}</div>
@@ -376,16 +382,44 @@ export default function SubtitleOverlay({
                 {/* Sovereignty Badge */}
                 <div className="subtitle-sovereignty-badge">
                     <span>🛡️ Internal Audio — No Microphone Required</span>
+                    {currentCue?.startTime != null && (
+                        <span className="subtitle-timestamp">
+                            ⏱ {formatTimestamp(currentCue.startTime)}–{formatTimestamp(currentCue.endTime)}
+                        </span>
+                    )}
                 </div>
             </div>
 
             <style jsx>{`
+                .subtitle-overlay {
+                    position: absolute;
+                    bottom: 52px;
+                    left: 0;
+                    right: 0;
+                    z-index: 80;
+                    pointer-events: auto;
+                }
+                .subtitle-overlay-inner {
+                    margin: 0 8px;
+                    padding: 8px 12px;
+                    background: rgba(10, 22, 40, 0.92);
+                    border: 1px solid rgba(212, 168, 83, 0.15);
+                    border-radius: var(--radius-lg, 12px);
+                    backdrop-filter: blur(12px);
+                }
+                .subtitle-header {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                    margin-bottom: 6px;
+                }
                 .subtitle-stream-indicator {
                     display: flex;
                     align-items: center;
                     gap: 4px;
-                    padding: 4px 10px;
-                    border-radius: var(--radius-full, 999px);
+                    padding: 3px 8px;
+                    border-radius: 999px;
                     background: rgba(255, 255, 255, 0.06);
                     border: 1px solid rgba(255, 255, 255, 0.1);
                     font-size: 11px;
@@ -396,35 +430,186 @@ export default function SubtitleOverlay({
                     border-color: rgba(220, 38, 38, 0.4);
                     animation: streamPulse 2s ease-in-out infinite;
                 }
-                .subtitle-stream-icon {
-                    font-size: 14px;
-                }
+                .subtitle-stream-icon { font-size: 14px; }
                 .subtitle-stream-label {
                     font-weight: 700;
                     font-size: 10px;
                     letter-spacing: 0.08em;
                     color: rgba(255, 255, 255, 0.9);
                 }
+                .subtitle-lang-selector { display: flex; align-items: center; gap: 4px; }
+                .subtitle-lang-label {
+                    font-size: 10px;
+                    color: rgba(255, 255, 255, 0.5);
+                    text-transform: uppercase;
+                    letter-spacing: 0.06em;
+                }
+                .subtitle-lang-dropdown {
+                    background: rgba(255, 255, 255, 0.08);
+                    color: white;
+                    border: 1px solid rgba(255, 255, 255, 0.12);
+                    border-radius: 6px;
+                    padding: 4px 8px;
+                    font-size: 12px;
+                    cursor: pointer;
+                    outline: none;
+                }
+                .subtitle-lang-dropdown:focus {
+                    border-color: var(--color-gold, #d4a853);
+                }
+                .subtitle-arrow {
+                    color: rgba(255, 255, 255, 0.3);
+                    font-size: 14px;
+                }
+                .vetting-badge {
+                    display: flex;
+                    align-items: center;
+                    gap: 3px;
+                    padding: 2px 8px;
+                    background: rgba(34, 197, 94, 0.12);
+                    border: 1px solid rgba(34, 197, 94, 0.3);
+                    border-radius: 999px;
+                    font-size: 10px;
+                    color: rgba(34, 197, 94, 0.9);
+                }
+                .vetting-badge-icon { font-size: 11px; }
+                .vetting-badge-text { font-weight: 600; letter-spacing: 0.05em; }
+                .glossary-lock-badge {
+                    font-size: 12px;
+                    opacity: 0.5;
+                }
+                .subtitle-tier-badge {
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-size: 10px;
+                    font-weight: 700;
+                    background: rgba(212, 168, 83, 0.2);
+                    color: var(--color-gold, #d4a853);
+                    border: 1px solid rgba(212, 168, 83, 0.3);
+                }
                 .subtitle-no-mic-badge {
                     font-size: 12px;
                     opacity: 0.7;
                     cursor: help;
+                    margin-left: auto;
                 }
+                .subtitle-close {
+                    background: none;
+                    border: none;
+                    color: rgba(255, 255, 255, 0.5);
+                    font-size: 16px;
+                    cursor: pointer;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    transition: all 0.2s;
+                }
+                .subtitle-close:hover {
+                    background: rgba(255, 255, 255, 0.1);
+                    color: white;
+                }
+
+                /* ── Directive 013: Cue Container with Fade Transitions ── */
+                .subtitle-cue-container {
+                    padding: 6px 0;
+                    min-height: 44px;
+                    transition: opacity 0.3s ease, transform 0.3s ease;
+                }
+                .subtitle-cue-container.cue-visible {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+                .subtitle-cue-container.cue-hidden {
+                    opacity: 0.3;
+                    transform: translateY(2px);
+                }
+                .subtitle-original {
+                    font-size: 13px;
+                    color: rgba(255, 255, 255, 0.5);
+                    font-style: italic;
+                    margin-bottom: 3px;
+                    line-height: 1.4;
+                    transition: direction 0.3s;
+                }
+                .subtitle-translated {
+                    font-size: 16px;
+                    color: rgba(255, 255, 255, 0.95);
+                    font-weight: 500;
+                    line-height: 1.5;
+                    transition: direction 0.3s;
+                }
+                .subtitle-translated :global(.sacred-term) {
+                    color: var(--color-gold, #d4a853);
+                    font-weight: 700;
+                }
+                .subtitle-translating {
+                    opacity: 0.4;
+                    font-style: italic;
+                }
+                .subtitle-error {
+                    color: rgba(239, 68, 68, 0.8);
+                    font-size: 12px;
+                }
+                .subtitle-status {
+                    color: rgba(255, 255, 255, 0.4);
+                    font-size: 13px;
+                    text-align: center;
+                }
+
+                /* ── Directive 013: Scene Description & Meta Row ── */
+                .subtitle-meta-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    margin-top: 4px;
+                    flex-wrap: wrap;
+                }
+                .subtitle-scene {
+                    font-size: 10px;
+                    color: rgba(212, 168, 83, 0.5);
+                    font-style: italic;
+                }
+                .subtitle-sacred-note {
+                    font-size: 10px;
+                    color: rgba(34, 197, 94, 0.6);
+                }
+
+                /* ── Sovereignty Badge with Timestamp ── */
                 .subtitle-sovereignty-badge {
                     display: flex;
                     align-items: center;
-                    justify-content: center;
-                    padding: 4px 0;
+                    justify-content: space-between;
+                    padding: 3px 0 0;
                     font-size: 9px;
                     letter-spacing: 0.06em;
-                    color: rgba(212, 168, 83, 0.6);
+                    color: rgba(212, 168, 83, 0.5);
                     text-transform: uppercase;
                 }
+                .subtitle-timestamp {
+                    font-variant-numeric: tabular-nums;
+                    color: rgba(255, 255, 255, 0.3);
+                    font-size: 9px;
+                }
+
                 @keyframes streamPulse {
                     0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
                     50% { box-shadow: 0 0 8px 2px rgba(220, 38, 38, 0.3); }
                 }
+                @media (max-width: 768px) {
+                    .subtitle-overlay { bottom: 48px; }
+                    .subtitle-overlay-inner { margin: 0 4px; padding: 6px 8px; }
+                    .subtitle-original { font-size: 12px; }
+                    .subtitle-translated { font-size: 14px; }
+                    .subtitle-scene { display: none; }
+                }
             `}</style>
         </div>
     );
+}
+
+// Directive 013: Format seconds → MM:SS
+function formatTimestamp(seconds) {
+    if (seconds == null || isNaN(seconds)) return "0:00";
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
 }
