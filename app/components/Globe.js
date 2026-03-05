@@ -4,12 +4,28 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Interactive 3D Globe — Global Aggregator Map
- * Renders live-stream "pulses" worldwide using globe.gl.
- * Features: "Follow the Sun" terminator, click-to-select, tier-based styling.
+ * Directive 014: HQ Anchoring & Parish Relocation
+ *
+ * Features:
+ * - "Introductory Revolution": Single smooth 360° rotation on page load.
+ * - HQ Auto-Stop: After revolution, globe anchors to Living Logos HQ.
+ * - HQ Visuals: Deep Royal Gold pin with distinct pulse animation.
+ * - User Sovereignty: All auto-rotation ceases after HQ anchor. Full manual control.
+ * - Tier-based styling: Gold (Tier 1), Silver (Tier 2), Bronze (Tier 3).
  *
  * KEY FIX: Globe.gl is mounted into a separate inner div to avoid
  * React DOM hydration conflicts (removeChild errors).
  */
+
+// — Directive 014: HQ Coordinates (Ecumenical Patriarchate — The Phanar) —
+const HQ_LAT = 41.0283;
+const HQ_LNG = 28.9514;
+const HQ_ALTITUDE = 1.8;
+
+// — Deep Royal Gold for HQ —
+const HQ_POINT_COLOR = "#B8860B";
+const HQ_RING_COLOR = "rgba(184, 134, 11, 0.60)";
+
 export default function Globe({ streams = [], onSelectStream }) {
     const mountRef = useRef(null);
     const globeInstanceRef = useRef(null);
@@ -22,7 +38,7 @@ export default function Globe({ streams = [], onSelectStream }) {
         if (initedRef.current || !mountRef.current) return;
         initedRef.current = true;
 
-        let sunInterval;
+        let revolutionFrame;
         let handleResize;
 
         async function initGlobe() {
@@ -49,11 +65,19 @@ export default function Globe({ streams = [], onSelectStream }) {
                     .height(mount.clientHeight);
 
                 // — Point markers for each stream —
+                // Directive 014: HQ gets unique Deep Royal Gold + larger radius
                 globe
                     .pointsData(streams)
-                    .pointAltitude((d) => (d.isLive ? 0.06 : 0.02))
-                    .pointRadius((d) => (d.isLive ? 0.6 : 0.3))
+                    .pointAltitude((d) => {
+                        if (d.isHQ) return 0.1;
+                        return d.isLive ? 0.06 : 0.02;
+                    })
+                    .pointRadius((d) => {
+                        if (d.isHQ) return 0.9;
+                        return d.isLive ? 0.6 : 0.3;
+                    })
                     .pointColor((d) => {
+                        if (d.isHQ) return HQ_POINT_COLOR;
                         if (!d.isLive) return "rgba(158, 158, 158, 0.5)";
                         if (d.authority?.level === 1) return "#F0C75E";
                         if (d.authority?.level === 2) return "#C0C0C0";
@@ -64,7 +88,7 @@ export default function Globe({ streams = [], onSelectStream }) {
             <div style="
               background: rgba(10, 14, 39, 0.92);
               backdrop-filter: blur(12px);
-              border: 1px solid rgba(212, 168, 83, 0.3);
+              border: 1px solid ${d.isHQ ? 'rgba(184, 134, 11, 0.6)' : 'rgba(212, 168, 83, 0.3)'};
               border-radius: 10px;
               padding: 12px 16px;
               font-family: Inter, sans-serif;
@@ -73,8 +97,9 @@ export default function Globe({ streams = [], onSelectStream }) {
               box-shadow: 0 8px 32px rgba(0,0,0,0.5);
             ">
               <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">
-                ${d.isLive ? '<span style="color: #C62828;">● </span>' : ""}${d.name}
+                ${d.isHQ ? '<span style="color: #B8860B;">⛪ </span>' : d.isLive ? '<span style="color: #C62828;">● </span>' : ""}${d.name}
               </div>
+              ${d.isHQ ? '<div style="font-size: 11px; color: #B8860B; margin-bottom: 4px; font-weight: 600;">☦ Living Logos Headquarters</div>' : ''}
               <div style="font-size: 12px; color: #9A9ABF; margin-bottom: 6px;">${d.location}</div>
               <div style="display: flex; gap: 8px; font-size: 11px;">
                 <span style="background: rgba(212,168,83,0.15); padding: 2px 8px; border-radius: 99px; color: #D4A853;">${d.language}</span>
@@ -91,47 +116,106 @@ export default function Globe({ streams = [], onSelectStream }) {
                         if (onSelectStream) onSelectStream(point);
                     });
 
-                // — Rings (pulse) for live streams + permanent Gold Pulse for Tier 1 —
+                // — Rings (pulse): HQ gets unique Deep Royal Gold pulse —
+                // Directive 014: Three tiers of pulse — HQ (royal), Pinned/Tier1 (gold), Standard (dim gold)
                 const liveStreams = streams.filter((s) => s.isLive);
                 const pinnedStreams = streams.filter((s) => s.pinned || s.authority?.level === 1);
-                // Combine: pinned streams always pulse, plus any live non-pinned
                 const ringStreams = [
-                    ...pinnedStreams.map((s) => ({ ...s, _pinned: true })),
-                    ...liveStreams.filter((s) => !s.pinned && s.authority?.level !== 1).map((s) => ({ ...s, _pinned: false })),
+                    // HQ always pulses with unique animation
+                    ...streams.filter((s) => s.isHQ).map((s) => ({ ...s, _pulseType: "hq" })),
+                    // Pinned/Tier 1 pulse (excluding HQ to avoid duplicates)
+                    ...pinnedStreams.filter((s) => !s.isHQ).map((s) => ({ ...s, _pulseType: "pinned" })),
+                    // Standard live pulse (non-pinned, non-Tier1)
+                    ...liveStreams.filter((s) => !s.pinned && !s.isHQ && s.authority?.level !== 1).map((s) => ({ ...s, _pulseType: "standard" })),
                 ];
                 globe
                     .ringsData(ringStreams)
                     .ringLat((d) => d.lat)
                     .ringLng((d) => d.lng)
-                    .ringColor((d) => () =>
-                        d._pinned
-                            ? "rgba(240, 199, 94, 0.50)"  // Gold Pulse — Tier 1
-                            : "rgba(212, 168, 83, 0.35)"  // Standard live pulse
-                    )
-                    .ringMaxRadius((d) => d._pinned ? 5 : 3)
-                    .ringPropagationSpeed((d) => d._pinned ? 2.5 : 1.5)
-                    .ringRepeatPeriod((d) => d._pinned ? 1200 : 2000);
+                    .ringColor((d) => () => {
+                        if (d._pulseType === "hq") return HQ_RING_COLOR;
+                        if (d._pulseType === "pinned") return "rgba(240, 199, 94, 0.50)";
+                        return "rgba(212, 168, 83, 0.35)";
+                    })
+                    .ringMaxRadius((d) => {
+                        if (d._pulseType === "hq") return 7;
+                        if (d._pulseType === "pinned") return 5;
+                        return 3;
+                    })
+                    .ringPropagationSpeed((d) => {
+                        if (d._pulseType === "hq") return 3.5;
+                        if (d._pulseType === "pinned") return 2.5;
+                        return 1.5;
+                    })
+                    .ringRepeatPeriod((d) => {
+                        if (d._pulseType === "hq") return 800;
+                        if (d._pulseType === "pinned") return 1200;
+                        return 2000;
+                    });
 
-                // — Initial camera angle —
-                globe.pointOfView({ lat: 35, lng: 25, altitude: 2.2 }, 1000);
-
-                // — Auto-rotate —
-                globe.controls().autoRotate = true;
-                globe.controls().autoRotateSpeed = 0.3;
+                // — Directive 014: Disable ALL auto-rotation —
+                globe.controls().autoRotate = false;
+                globe.controls().autoRotateSpeed = 0;
                 globe.controls().enableZoom = true;
 
                 globeInstanceRef.current = globe;
                 setIsLoaded(true);
 
-                // — Follow the Sun —
-                sunInterval = setInterval(() => {
-                    const hour = new Date().getUTCHours();
-                    const sunLng = 30 - hour * 15;
+                // ═══════════════════════════════════════════════════════
+                // DIRECTIVE 014: "Introductory Revolution"
+                // Single smooth 360° rotation → auto-stop at HQ
+                // ═══════════════════════════════════════════════════════
+
+                // Set initial POV
+                const startLat = 20;
+                const startLng = HQ_LNG - 180; // Start 180° away from HQ
+                const startAlt = 2.5;
+                globe.pointOfView({ lat: startLat, lng: startLng, altitude: startAlt }, 0);
+
+                const REVOLUTION_DURATION = 6000; // 6 seconds for the full revolution
+                const ANCHOR_DURATION = 1500;     // 1.5 seconds to ease into HQ
+                const revolutionStart = performance.now();
+
+                function easeInOutCubic(t) {
+                    return t < 0.5
+                        ? 4 * t * t * t
+                        : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                }
+
+                function animateRevolution(now) {
+                    const elapsed = now - revolutionStart;
+                    const progress = Math.min(elapsed / REVOLUTION_DURATION, 1);
+                    const eased = easeInOutCubic(progress);
+
+                    // Rotate 360° from startLng
+                    const currentLng = startLng + (360 * eased);
+                    // Gradually change latitude towards HQ
+                    const currentLat = startLat + (HQ_LAT - startLat) * eased;
+                    // Gradually lower altitude towards HQ viewing altitude
+                    const currentAlt = startAlt + (HQ_ALTITUDE - startAlt) * eased;
+
                     globe.pointOfView(
-                        { lat: 30, lng: sunLng > 180 ? sunLng - 360 : sunLng },
-                        3000
+                        { lat: currentLat, lng: currentLng, altitude: currentAlt },
+                        0 // Instant update — we drive the animation ourselves
                     );
-                }, 60000);
+
+                    if (progress < 1) {
+                        revolutionFrame = requestAnimationFrame(animateRevolution);
+                    } else {
+                        // Revolution complete → Anchor smoothly to HQ
+                        globe.pointOfView(
+                            { lat: HQ_LAT, lng: HQ_LNG, altitude: HQ_ALTITUDE },
+                            ANCHOR_DURATION
+                        );
+                        // User Sovereignty: No further auto-movement.
+                        // controls.autoRotate remains false.
+                    }
+                }
+
+                // Start the revolution after a short delay for the globe to render
+                setTimeout(() => {
+                    revolutionFrame = requestAnimationFrame(animateRevolution);
+                }, 800);
 
                 // — Resize handler —
                 handleResize = () => {
@@ -150,7 +234,7 @@ export default function Globe({ streams = [], onSelectStream }) {
         initGlobe();
 
         return () => {
-            if (sunInterval) clearInterval(sunInterval);
+            if (revolutionFrame) cancelAnimationFrame(revolutionFrame);
             if (handleResize) window.removeEventListener("resize", handleResize);
             if (globeInstanceRef.current) {
                 globeInstanceRef.current._destructor?.();
@@ -170,8 +254,9 @@ export default function Globe({ streams = [], onSelectStream }) {
         const liveStreams = streams.filter((s) => s.isLive);
         const pinnedStreams = streams.filter((s) => s.pinned || s.authority?.level === 1);
         const ringStreams = [
-            ...pinnedStreams.map((s) => ({ ...s, _pinned: true })),
-            ...liveStreams.filter((s) => !s.pinned && s.authority?.level !== 1).map((s) => ({ ...s, _pinned: false })),
+            ...streams.filter((s) => s.isHQ).map((s) => ({ ...s, _pulseType: "hq" })),
+            ...pinnedStreams.filter((s) => !s.isHQ).map((s) => ({ ...s, _pulseType: "pinned" })),
+            ...liveStreams.filter((s) => !s.pinned && !s.isHQ && s.authority?.level !== 1).map((s) => ({ ...s, _pulseType: "standard" })),
         ];
         globe.ringsData(ringStreams);
     }, [streams]);
