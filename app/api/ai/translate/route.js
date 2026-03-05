@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { translateText, generateSubtitles, SUPPORTED_LANGUAGES, detectSacredTerms } from "@/lib/patristic-ai";
+import { translateText, generateSubtitles, SUPPORTED_LANGUAGES, detectSacredTerms, sanitizeTheologicalOutput } from "@/lib/patristic-ai";
 
 /**
  * POST /api/ai/translate
@@ -112,6 +112,10 @@ export async function POST(request) {
 
         const vettingRequired = sacredTerms.length > 0;
         const confidence = vettingRequired ? 0.85 : 0.95;
+
+        // Directive 016/017: Sanitize for theological accuracy
+        // Catches Islamic idioms that MyMemory may return in Arabic output
+        translatedText = sanitizeTheologicalOutput(translatedText);
 
         const response = {
             success: true,
