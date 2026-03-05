@@ -4,12 +4,12 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Interactive 3D Globe — Global Aggregator Map
- * Directive 014: HQ Anchoring & Parish Relocation
+ * Directive 014/015: HQ Anchoring, Parish Relocation & Sovereign Red Anchor
  *
  * Features:
  * - "Introductory Revolution": Single smooth 360° rotation on page load.
  * - HQ Auto-Stop: After revolution, globe anchors to Living Logos HQ.
- * - HQ Visuals: Deep Royal Gold pin with distinct pulse animation.
+ * - HQ Visuals: Sovereign Red pin (#D32F2F) with red glow and distinct pulse.
  * - User Sovereignty: All auto-rotation ceases after HQ anchor. Full manual control.
  * - Tier-based styling: Gold (Tier 1), Silver (Tier 2), Bronze (Tier 3).
  *
@@ -22,9 +22,9 @@ const HQ_LAT = 41.0283;
 const HQ_LNG = 28.9514;
 const HQ_ALTITUDE = 1.8;
 
-// — Deep Royal Gold for HQ —
-const HQ_POINT_COLOR = "#B8860B";
-const HQ_RING_COLOR = "rgba(184, 134, 11, 0.60)";
+// — Directive 015: Sovereign Red for HQ —
+const HQ_POINT_COLOR = "#D32F2F";
+const HQ_RING_COLOR = "rgba(211, 47, 47, 0.60)";
 
 export default function Globe({ streams = [], onSelectStream }) {
     const mountRef = useRef(null);
@@ -88,18 +88,16 @@ export default function Globe({ streams = [], onSelectStream }) {
             <div style="
               background: rgba(10, 14, 39, 0.92);
               backdrop-filter: blur(12px);
-              border: 1px solid ${d.isHQ ? 'rgba(184, 134, 11, 0.6)' : 'rgba(212, 168, 83, 0.3)'};
+              border: 1px solid ${d.isHQ ? 'rgba(211, 47, 47, 0.6)' : 'rgba(212, 168, 83, 0.3)'};
               border-radius: 10px;
               padding: 12px 16px;
               font-family: Inter, sans-serif;
               color: #EAEAF2;
               max-width: 260px;
-              box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+              box-shadow: ${d.isHQ ? '0 0 20px rgba(211, 47, 47, 0.4), 0 8px 32px rgba(0,0,0,0.5)' : '0 8px 32px rgba(0,0,0,0.5)'};
             ">
-              <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">
-                ${d.isHQ ? '<span style="color: #B8860B;">⛪ </span>' : d.isLive ? '<span style="color: #C62828;">● </span>' : ""}${d.name}
-              </div>
-              ${d.isHQ ? '<div style="font-size: 11px; color: #B8860B; margin-bottom: 4px; font-weight: 600;">☦ Living Logos Headquarters</div>' : ''}
+              ${d.isHQ ? '<div style="font-weight: 800; font-size: 15px; margin-bottom: 6px; color: #D4A853; text-transform: uppercase; letter-spacing: 0.5px;">☦ HEADQUARTERS: ' + d.name + '</div>' : '<div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">' + (d.isLive ? '<span style="color: #C62828;">● </span>' : '') + d.name + '</div>'}
+              ${d.isHQ ? '<div style="font-size: 11px; color: #D32F2F; margin-bottom: 4px; font-weight: 600;">🔴 Sovereign Anchor — The Living Logos</div>' : ''}
               <div style="font-size: 12px; color: #9A9ABF; margin-bottom: 6px;">${d.location}</div>
               <div style="display: flex; gap: 8px; font-size: 11px;">
                 <span style="background: rgba(212,168,83,0.15); padding: 2px 8px; border-radius: 99px; color: #D4A853;">${d.language}</span>
@@ -116,8 +114,8 @@ export default function Globe({ streams = [], onSelectStream }) {
                         if (onSelectStream) onSelectStream(point);
                     });
 
-                // — Rings (pulse): HQ gets unique Deep Royal Gold pulse —
-                // Directive 014: Three tiers of pulse — HQ (royal), Pinned/Tier1 (gold), Standard (dim gold)
+                // — Rings (pulse): HQ gets unique Sovereign Red pulse —
+                // Directive 015: Three tiers of pulse — HQ (sovereign red), Pinned/Tier1 (gold), Standard (dim gold)
                 const liveStreams = streams.filter((s) => s.isLive);
                 const pinnedStreams = streams.filter((s) => s.pinned || s.authority?.level === 1);
                 const ringStreams = [
@@ -138,7 +136,7 @@ export default function Globe({ streams = [], onSelectStream }) {
                         return "rgba(212, 168, 83, 0.35)";
                     })
                     .ringMaxRadius((d) => {
-                        if (d._pulseType === "hq") return 7;
+                        if (d._pulseType === "hq") return 6.25; // 25% larger than Tier 1 (5 * 1.25)
                         if (d._pulseType === "pinned") return 5;
                         return 3;
                     })
