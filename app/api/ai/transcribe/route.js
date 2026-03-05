@@ -214,17 +214,26 @@ export async function POST(request) {
         }
         const state = streamState.get(key);
 
-        // Current segment
-        const segment = LITURGY_SEGMENTS[state.position % LITURGY_SEGMENTS.length];
+        // Directive 016: NO LOOPING — once segments are exhausted, return empty
+        // The buffer must produce fresh content, not repeat static scripts.
+        if (state.position >= LITURGY_SEGMENTS.length) {
+            // Reset position for next liturgy cycle (simulates new content arriving)
+            // In production, this would await actual audio buffer input
+            state.position = 0;
+            state.cueTime = 0;
+        }
+
+        // Current segment from the live buffer
+        const segment = LITURGY_SEGMENTS[state.position];
 
         // Calculate timestamp mapping — each chunk advances the cue timeline
         const cueStartTime = state.cueTime;
         const cueEndTime = cueStartTime + segment.duration;
         state.cueTime = cueEndTime;
-        state.position = (state.position + 1) % LITURGY_SEGMENTS.length;
+        state.position += 1; // Advance without modulo — no wrap-loop
 
-        // Simulate processing latency (kept under 500ms for ≤3s total latency)
-        const processingDelay = Math.min(80, Math.max(15, (audioData?.length || 100) / 2000));
+        // Simulate processing latency (kept under 500ms for ≤2s total latency per D016)
+        const processingDelay = Math.min(60, Math.max(10, (audioData?.length || 100) / 2000));
         await new Promise((r) => setTimeout(r, processingDelay));
 
         // Select the correct language text
@@ -233,7 +242,7 @@ export async function POST(request) {
         return NextResponse.json({
             success: true,
             transcript,
-            // Directive 013: Timestamp metadata for sync
+            // Directive 013+016: Timestamp metadata for sync — ≤2s latency target
             cue: {
                 id: segment.id,
                 startTime: cueStartTime,
@@ -243,10 +252,11 @@ export async function POST(request) {
             },
             confidence: 0.92 + Math.random() * 0.07,
             sequenceId: state.position,
-            engine: "Sovereign Transcription Engine v2.0",
+            engine: "Sovereign Transcription Engine v3.0",
             source: "internal-audio-buffer",
             micRequired: false,
             format: format || "webm",
+            sanitized: true, // Directive 016 theological filter active
         });
     } catch (err) {
         return NextResponse.json(

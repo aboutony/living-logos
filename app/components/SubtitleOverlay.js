@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Directives 011, 012 & 013
+ * SubtitleOverlay — Directives 011, 012, 013 & 016
  *
  * 011: Internal digital audio stream processing, no microphone
  * 012: Zero-click activation on first user interaction
  * 013: Real-Time Sync with timestamped cues + RTL auto-detection
+ * 016: Sacred Glossary Enforcement, 50% font increase, anti-loop real-time sync
  *
  * RTL Languages: Arabic (ar), Persian (fa), Hebrew (he), Urdu (ur)
  * Automatically applies `direction: rtl` and `text-align: right` for these.
@@ -134,11 +135,17 @@ export default function SubtitleOverlay({
             if (cue?.scene) setSceneDesc(cue.scene);
             setCueVisible(true);
 
-            // Auto-fade out after cue duration (or 5s default)
+            // Directive 016: Auto-clear after cue duration — no looping
+            // When cue expires, clear the display completely
             clearTimeout(cueTimerRef.current);
             const displayDuration = (cue?.duration || 5) * 1000;
             cueTimerRef.current = setTimeout(() => {
                 setCueVisible(false);
+                // Directive 016: Clear stale content after fade
+                setTimeout(() => {
+                    setCurrentCue(null);
+                    setTranslatedText("");
+                }, 400);
             }, displayDuration - 500); // fade slightly before next cue
         }, 150); // brief gap for fade transition
 
@@ -508,10 +515,10 @@ export default function SubtitleOverlay({
                     color: white;
                 }
 
-                /* ── Directive 013: Cue Container with Fade Transitions ── */
+                /* ── Directive 013+016: Cue Container with Fade Transitions ── */
                 .subtitle-cue-container {
                     padding: 6px 0;
-                    min-height: 44px;
+                    min-height: 52px;
                     transition: opacity 0.3s ease, transform 0.3s ease;
                 }
                 .subtitle-cue-container.cue-visible {
@@ -523,7 +530,7 @@ export default function SubtitleOverlay({
                     transform: translateY(2px);
                 }
                 .subtitle-original {
-                    font-size: 13px;
+                    font-size: 18px;
                     color: rgba(255, 255, 255, 0.5);
                     font-style: italic;
                     margin-bottom: 3px;
@@ -531,10 +538,12 @@ export default function SubtitleOverlay({
                     transition: direction 0.3s;
                 }
                 .subtitle-translated {
-                    font-size: 16px;
+                    font-size: 24px;
                     color: rgba(255, 255, 255, 0.95);
                     font-weight: 500;
-                    line-height: 1.5;
+                    line-height: 1.4;
+                    max-height: 3.0em;
+                    overflow: hidden;
                     transition: direction 0.3s;
                 }
                 .subtitle-translated :global(.sacred-term) {
@@ -597,8 +606,8 @@ export default function SubtitleOverlay({
                 @media (max-width: 768px) {
                     .subtitle-overlay { bottom: 48px; }
                     .subtitle-overlay-inner { margin: 0 4px; padding: 6px 8px; }
-                    .subtitle-original { font-size: 12px; }
-                    .subtitle-translated { font-size: 14px; }
+                    .subtitle-original { font-size: 15px; }
+                    .subtitle-translated { font-size: 21px; }
                     .subtitle-scene { display: none; }
                 }
             `}</style>
