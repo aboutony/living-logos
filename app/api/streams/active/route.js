@@ -34,6 +34,7 @@ export async function GET(request) {
             rite: s.rite,
             authority: s.authority,
             isLive: s.isLive,
+            isHQ: s.isHQ || false, // Directive 015: Sovereign Red HQ flag
             digitalSeal: s.digitalSeal,
             viewerCount: s.viewerCount,
             pinned: s.pinned || false,
