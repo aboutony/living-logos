@@ -74,7 +74,9 @@ function YouTubePlayerMode({
           frameBorder="0"
         />
         {/* Subtitle Overlay — YouTube mode with periodic transcription */}
+        {/* Directive 017: key forces remount on video change (multi-video purge) */}
         <SubtitleOverlay
+          key={`yt-sub-${activeVideo?.videoId}`}
           streamId={streamId || "stream-rumorthodox"}
           enabled={subtitlesEnabled}
           onClose={() => setSubtitlesEnabled(false)}
@@ -123,11 +125,12 @@ function YouTubePlayerMode({
 }
 
 /**
- * SovereignPlayer — Directives 011 & 012
+ * SovereignPlayer — Directives 011, 012 & 017
  *
  * Directive 011: Internal audio buffer capture via Web Audio API
  * Directive 012: Zero-click activation — auto-enables subtitles on first gesture
  *               "Tap to Unmute Sanctuary" gold button if browser blocks audio
+ * Directive 017: Multi-video purge — clearSubtitles() on src/video change
  */
 export default function SovereignPlayer({
   src,
@@ -148,6 +151,8 @@ export default function SovereignPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(autoSubtitles);
+  // Directive 017: Key used to force-remount SubtitleOverlay on video change
+  const [subtitleKey, setSubtitleKey] = useState(0);
   const hideTimer = useRef(null);
 
   // ─── Directive 012: Global Interaction Listener ───
@@ -187,6 +192,13 @@ export default function SovereignPlayer({
     } else {
       video.src = src;
     }
+  }, [src]);
+
+  // ─── Directive 017: Multi-Video Purge ───
+  // Clear subtitles whenever the video source changes
+  useEffect(() => {
+    // Increment key to force-remount SubtitleOverlay, flushing all state
+    setSubtitleKey((k) => k + 1);
   }, [src]);
 
   function togglePlay() {
@@ -341,9 +353,10 @@ export default function SovereignPlayer({
 
       {children}
 
-      {/* Patristic AI Subtitle Overlay — Directive 011+012 */}
+      {/* Patristic AI Subtitle Overlay — Directive 011+012+017 */}
       {!youtubeChannel && (
         <SubtitleOverlay
+          key={`sub-${subtitleKey}`}
           streamId={streamId || "stream-phanar-001"}
           enabled={subtitlesEnabled}
           onClose={() => setSubtitlesEnabled(false)}
