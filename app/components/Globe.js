@@ -17,9 +17,9 @@ import { useEffect, useRef, useState } from "react";
  * React DOM hydration conflicts (removeChild errors).
  */
 
-// — Directive 014: HQ Coordinates (Ecumenical Patriarchate — The Phanar) —
-const HQ_LAT = 41.0283;
-const HQ_LNG = 28.9514;
+// — Directive 015: HQ Coordinates (Holy Bishopric of Morphou — Evrychou, Cyprus) —
+const HQ_LAT = 35.0417;
+const HQ_LNG = 32.9015;
 const HQ_ALTITUDE = 1.8;
 
 // — Directive 015: Sovereign Red for HQ —
