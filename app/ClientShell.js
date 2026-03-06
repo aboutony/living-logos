@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { Globe, Radio, CalendarDays, Wallet, Menu, X } from "lucide-react";
+import OnboardingGate from "./components/OnboardingGate";
+import { generateDID, updateDIDProfile } from "@/lib/ssi";
 
 /**
  * ClientShell — Directive 005: Absolute Mobile-First
@@ -52,6 +54,29 @@ export default function ClientShell({ children }) {
         localStorage.setItem("ll-theme", next);
     }, [theme]);
 
+    /* ── Directive 019: DID Enrichment on Onboarding Complete ── */
+    const handleOnboardingComplete = useCallback(({ language, country }) => {
+        try {
+            // Retrieve or generate DID
+            let did;
+            const storedDID = localStorage.getItem("ll-did");
+            if (storedDID) {
+                did = JSON.parse(storedDID);
+            } else {
+                did = generateDID("Orthodox Faithful");
+                localStorage.setItem("ll-did", JSON.stringify(did));
+            }
+
+            // Enrich DID profile with locale data (sovereign — stays on device)
+            const enriched = updateDIDProfile(did, { language, country });
+            if (enriched) {
+                localStorage.setItem("ll-did", JSON.stringify(enriched));
+            }
+        } catch {
+            /* DID enrichment should never block UX */
+        }
+    }, []);
+
     /* ── Drawer lifecycle ── */
     useEffect(() => { setDrawerOpen(false); }, [pathname]);
     useEffect(() => {
@@ -66,6 +91,12 @@ export default function ClientShell({ children }) {
 
     return (
         <>
+            {/* ═══════════════════════════════════════
+          DIRECTIVE 019: ONBOARDING GATE
+          Pre-Login Selection Layer — appears once per user
+          ═══════════════════════════════════════ */}
+            <OnboardingGate onComplete={handleOnboardingComplete} />
+
             {/* ═══════════════════════════════════════
           HEADER — 64px Sanctuary
           Logo (left) + Theme Toggle + Hamburger (right)

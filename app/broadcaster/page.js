@@ -3,8 +3,9 @@
 import { useState, useEffect } from "react";
 
 /**
- * Broadcaster Portal — Directive 010: Financial Sovereignty
- * Live audit log, treasury stats, zero-fee transparency.
+ * Broadcaster Portal — Directive 010 + 019
+ * Live audit log, treasury stats, zero-fee transparency,
+ * and Diaspora Distribution analytics.
  */
 
 function formatCurrency(n) {
@@ -26,7 +27,9 @@ function formatTime(ts) {
 export default function BroadcasterPage() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [diasporaData, setDiasporaData] = useState(null);
 
+    // Fetch treasury data
     useEffect(() => {
         async function load() {
             try {
@@ -37,7 +40,21 @@ export default function BroadcasterPage() {
             finally { setLoading(false); }
         }
         load();
-        const interval = setInterval(load, 15000); // Auto-refresh every 15s
+        const interval = setInterval(load, 15000);
+        return () => clearInterval(interval);
+    }, []);
+
+    // ── Directive 019: Fetch Diaspora Distribution ──
+    useEffect(() => {
+        async function loadDiaspora() {
+            try {
+                const res = await fetch("/api/analytics/selection");
+                const json = await res.json();
+                if (json.success) setDiasporaData(json);
+            } catch { /* silent */ }
+        }
+        loadDiaspora();
+        const interval = setInterval(loadDiaspora, 20000);
         return () => clearInterval(interval);
     }, []);
 
@@ -56,6 +73,13 @@ export default function BroadcasterPage() {
     const network = data?.network || {};
     const auditEntries = data?.auditLog?.entries || [];
     const policy = data?.auditLog?.sovereignPolicy || {};
+
+    // Diaspora data
+    const totalEvents = diasporaData?.totalEvents || 0;
+    const topLanguages = (diasporaData?.distribution?.languages || []).slice(0, 5);
+    const topCountries = (diasporaData?.distribution?.countries || []).slice(0, 5);
+    const maxLangCount = topLanguages[0]?.count || 1;
+    const maxCountryCount = topCountries[0]?.count || 1;
 
     return (
         <div className="broadcaster-page">
@@ -105,6 +129,67 @@ export default function BroadcasterPage() {
                 <span>🔴 <strong>{network.liveNow}</strong> live now</span>
                 <span>🔐 <strong>{network.sealed}</strong> sealed</span>
             </div>
+
+            {/* ══════════════════════════════════════════
+                DIRECTIVE 019: DIASPORA DISTRIBUTION
+                Onboarding analytics — language & country bar charts
+               ══════════════════════════════════════════ */}
+            <section className="diaspora-section" aria-label="Diaspora Distribution" id="diaspora-distribution">
+                <div className="diaspora-header">
+                    <h2 className="diaspora-title">
+                        <span className="diaspora-title-icon">🌐</span>
+                        Diaspora Distribution
+                    </h2>
+                    <span className="diaspora-total">
+                        {totalEvents} onboarded
+                    </span>
+                </div>
+
+                {totalEvents === 0 ? (
+                    <div className="diaspora-empty">
+                        <span className="diaspora-empty-icon">🗺️</span>
+                        <p>No selection events yet. The first faithful to enter the sanctuary will appear here.</p>
+                    </div>
+                ) : (
+                    <div className="diaspora-charts">
+                        {/* Top Languages */}
+                        <div className="diaspora-chart">
+                            <div className="diaspora-chart-title">Top Languages</div>
+                            {topLanguages.map((lang) => (
+                                <div className="diaspora-bar-row" key={lang.code}>
+                                    <span className="diaspora-bar-label">{lang.name}</span>
+                                    <div className="diaspora-bar-track">
+                                        <div
+                                            className="diaspora-bar-fill"
+                                            style={{ width: `${Math.max((lang.count / maxLangCount) * 100, 8)}%` }}
+                                        >
+                                            <span className="diaspora-bar-count">{lang.count}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Top Countries */}
+                        <div className="diaspora-chart">
+                            <div className="diaspora-chart-title">Top Countries</div>
+                            {topCountries.map((country) => (
+                                <div className="diaspora-bar-row" key={country.code}>
+                                    <span className="diaspora-bar-label">{country.name}</span>
+                                    <div className="diaspora-bar-track">
+                                        <div
+                                            className="diaspora-bar-fill"
+                                            style={{ width: `${Math.max((country.count / maxCountryCount) * 100, 8)}%` }}
+                                        >
+                                            <span className="diaspora-bar-count">{country.count}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </section>
 
             {/* Sovereign Policy */}
             <div className="broadcaster-policy">

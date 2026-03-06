@@ -26,7 +26,7 @@ const HQ_ALTITUDE = 1.8;
 const HQ_POINT_COLOR = "#D32F2F";
 const HQ_RING_COLOR = "rgba(211, 47, 47, 0.60)";
 
-export default function Globe({ streams = [], onSelectStream }) {
+export default function Globe({ streams = [], onSelectStream, targetCountry = null }) {
     const mountRef = useRef(null);
     const globeInstanceRef = useRef(null);
     const initedRef = useRef(false);
@@ -200,9 +200,15 @@ export default function Globe({ streams = [], onSelectStream }) {
                     if (progress < 1) {
                         revolutionFrame = requestAnimationFrame(animateRevolution);
                     } else {
-                        // Revolution complete → Anchor smoothly to HQ
+                        // ═══ Directive 019: Auto-Pivot ═══
+                        // If a target country is selected, soft-land there.
+                        // Otherwise, fall back to HQ anchor (Directive 014).
+                        const landLat = targetCountry?.lat ?? HQ_LAT;
+                        const landLng = targetCountry?.lng ?? HQ_LNG;
+                        const landAlt = targetCountry ? 2.0 : HQ_ALTITUDE;
+
                         globe.pointOfView(
-                            { lat: HQ_LAT, lng: HQ_LNG, altitude: HQ_ALTITUDE },
+                            { lat: landLat, lng: landLng, altitude: landAlt },
                             ANCHOR_DURATION
                         );
                         // User Sovereignty: No further auto-movement.

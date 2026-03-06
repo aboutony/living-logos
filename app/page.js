@@ -5,11 +5,11 @@ import dynamic from "next/dynamic";
 
 /**
  * Step 3 — Full-Bleed Map Page
+ * Directive 019: Reads stored country from localStorage and passes
+ * targetCountry to the Globe for auto-pivot after the 360° revolution.
  *
  * The Globe fills the entire viewport between the 64px header and 72px bottom bar.
  * Height: calc(100vh - 136px)
- * Clamping: margin-top: 64px, margin-bottom: 72px
- * Touch: touch-action: none on the globe container
  */
 const Globe = dynamic(() => import("./components/Globe"), {
   ssr: false,
@@ -36,6 +36,36 @@ const Globe = dynamic(() => import("./components/Globe"), {
 export default function HomePage() {
   const [streams, setStreams] = useState([]);
   const [selectedStream, setSelectedStream] = useState(null);
+  const [targetCountry, setTargetCountry] = useState(null);
+
+  // ── Directive 019: Load stored country for Globe auto-pivot ──
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("ll-country");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.lat && parsed?.lng) {
+          setTargetCountry(parsed);
+        }
+      }
+    } catch { /* silent */ }
+  }, []);
+
+  // Listen for onboarding completion event (real-time update)
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "ll-country" && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed?.lat && parsed?.lng) {
+            setTargetCountry(parsed);
+          }
+        } catch { /* silent */ }
+      }
+    };
+    window.addEventListener("storage", handler);
+    return () => window.removeEventListener("storage", handler);
+  }, []);
 
   useEffect(() => {
     async function fetchStreams() {
@@ -59,7 +89,11 @@ export default function HomePage() {
           Clamped between 64px header + 72px bottom bar
           ══════════════════════════════════════════ */}
       <section className="globe-hero-fullbleed">
-        <Globe streams={streams} onSelectStream={setSelectedStream} />
+        <Globe
+          streams={streams}
+          onSelectStream={setSelectedStream}
+          targetCountry={targetCountry}
+        />
 
         {/* Overlaid stats strip — pointer-events: none */}
         <div className="globe-hero-overlay">
