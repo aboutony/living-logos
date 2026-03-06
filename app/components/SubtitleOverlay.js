@@ -3,53 +3,53 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay â€” Directives 011, 012, 013, 016 & 018
+ * SubtitleOverlay — Directives 011, 012, 013, 016 & 018
  *
  * 011: Internal digital audio stream processing, no microphone
  * 012: Zero-click activation on first user interaction
  * 013: Real-Time Sync with timestamped cues + RTL auto-detection
  * 016: Sacred Glossary Enforcement, 50% font increase, anti-loop real-time sync
- * 018: Hardware-locked â€” 0% functional without live audio feed.
- *      Tied to HTMLMediaElement.currentTime. Pause â†’ idle + clear.
+ * 018: Hardware-locked — 0% functional without live audio feed.
+ *      Tied to HTMLMediaElement.currentTime. Pause → idle + clear.
  *
  * RTL Languages: Arabic (ar), Persian (fa), Hebrew (he), Urdu (ur)
  * Automatically applies `direction: rtl` and `text-align: right` for these.
  */
 
 const LANGUAGES = [
-    { code: "el", name: "Greek", flag: "ðŸ‡¬ðŸ‡·" },
-    { code: "en", name: "English", flag: "ðŸ‡¬ðŸ‡§" },
-    { code: "ar", name: "Arabic", flag: "ðŸ‡±ðŸ‡§", rtl: true },
-    { code: "ru", name: "Russian", flag: "ðŸ‡·ðŸ‡º" },
-    { code: "ro", name: "Romanian", flag: "ðŸ‡·ðŸ‡´" },
-    { code: "sr", name: "Serbian", flag: "ðŸ‡·ðŸ‡¸" },
-    { code: "bg", name: "Bulgarian", flag: "ðŸ‡§ðŸ‡¬" },
-    { code: "tr", name: "Turkish", flag: "ðŸ‡¹ðŸ‡·" },
-    { code: "ka", name: "Georgian", flag: "ðŸ‡¬ðŸ‡ª" },
-    { code: "fr", name: "French", flag: "ðŸ‡«ðŸ‡·" },
-    { code: "de", name: "German", flag: "ðŸ‡©ðŸ‡ª" },
-    { code: "it", name: "Italian", flag: "ðŸ‡®ðŸ‡¹" },
-    { code: "es", name: "Spanish", flag: "ðŸ‡ªðŸ‡¸" },
-    { code: "pt", name: "Portuguese", flag: "ðŸ‡§ðŸ‡·" },
-    { code: "no", name: "Norwegian", flag: "ðŸ‡³ðŸ‡´" },
-    { code: "sw", name: "Swahili", flag: "ðŸ‡°ðŸ‡ª" },
-    { code: "am", name: "Amharic", flag: "ðŸ‡ªðŸ‡¹" },
-    { code: "zh", name: "Mandarin", flag: "ðŸ‡¨ðŸ‡³" },
-    { code: "hi", name: "Hindi", flag: "ðŸ‡®ðŸ‡³" },
-    { code: "ja", name: "Japanese", flag: "ðŸ‡¯ðŸ‡µ" },
-    { code: "ko", name: "Korean", flag: "ðŸ‡°ðŸ‡·" },
-    { code: "fa", name: "Persian", flag: "ðŸ‡®ðŸ‡·", rtl: true },
-    { code: "he", name: "Hebrew", flag: "ðŸ‡®ðŸ‡±", rtl: true },
-    { code: "ur", name: "Urdu", flag: "ðŸ‡µðŸ‡°", rtl: true },
-    { code: "id", name: "Indonesian", flag: "ðŸ‡®ðŸ‡©" },
-    { code: "tl", name: "Tagalog", flag: "ðŸ‡µðŸ‡­" },
+    { code: "el", name: "Greek", flag: "🇬🇷" },
+    { code: "en", name: "English", flag: "🇬🇧" },
+    { code: "ar", name: "Arabic", flag: "🇱🇧", rtl: true },
+    { code: "ru", name: "Russian", flag: "🇷🇺" },
+    { code: "ro", name: "Romanian", flag: "🇷🇴" },
+    { code: "sr", name: "Serbian", flag: "🇷🇸" },
+    { code: "bg", name: "Bulgarian", flag: "🇧🇬" },
+    { code: "tr", name: "Turkish", flag: "🇹🇷" },
+    { code: "ka", name: "Georgian", flag: "🇬🇪" },
+    { code: "fr", name: "French", flag: "🇫🇷" },
+    { code: "de", name: "German", flag: "🇩🇪" },
+    { code: "it", name: "Italian", flag: "🇮🇹" },
+    { code: "es", name: "Spanish", flag: "🇪🇸" },
+    { code: "pt", name: "Portuguese", flag: "🇧🇷" },
+    { code: "no", name: "Norwegian", flag: "🇳🇴" },
+    { code: "sw", name: "Swahili", flag: "🇰🇪" },
+    { code: "am", name: "Amharic", flag: "🇪🇹" },
+    { code: "zh", name: "Mandarin", flag: "🇨🇳" },
+    { code: "hi", name: "Hindi", flag: "🇮🇳" },
+    { code: "ja", name: "Japanese", flag: "🇯🇵" },
+    { code: "ko", name: "Korean", flag: "🇰🇷" },
+    { code: "fa", name: "Persian", flag: "🇮🇷", rtl: true },
+    { code: "he", name: "Hebrew", flag: "🇮🇱", rtl: true },
+    { code: "ur", name: "Urdu", flag: "🇵🇰", rtl: true },
+    { code: "id", name: "Indonesian", flag: "🇮🇩" },
+    { code: "tl", name: "Tagalog", flag: "🇵🇭" },
 ];
 
 const RTL_CODES = new Set(["ar", "fa", "he", "ur"]);
 
 function renderSubtitleText(text) {
     if (!text) return null;
-    const parts = text.split("â¸¬");
+    const parts = text.split("⸬");
     return parts.map((part, idx) => {
         if (idx % 2 === 1) {
             return <span key={idx} className="sacred-term">{part}</span>;
@@ -79,7 +79,7 @@ export default function SubtitleOverlay({
     const [translatedText, setTranslatedText] = useState("");
     const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
-    const [statusText, setStatusText] = useState("ðŸ“¡ Waiting for first interactionâ€¦");
+    const [statusText, setStatusText] = useState("📡 Waiting for first interaction…");
     const [cueVisible, setCueVisible] = useState(false);
     const [sceneDesc, setSceneDesc] = useState("");
 
@@ -101,7 +101,7 @@ export default function SubtitleOverlay({
     const isTargetRTL = RTL_CODES.has(targetLang);
     const isSourceRTL = RTL_CODES.has(sourceLang);
 
-    // â”€â”€â”€ Translate via Patristic AI â”€â”€â”€
+    // ─── Translate via Patristic AI ───
     const translateSpeech = useCallback(async (text) => {
         if (!text || text.length < 2) return;
         try {
@@ -120,14 +120,14 @@ export default function SubtitleOverlay({
                 setTranslatedText(data.translation.translatedText || text);
                 setSacredTermCount(data.translation.sacredTerms?.length || 0);
                 setVetted(data.translation.sacredTerms?.length > 0);
-                setStatusText("ðŸ“¡ Live â€” Translating internal stream");
+                setStatusText("📡 Live — Translating internal stream");
             }
         } catch {
-            // Silent fail â€” will retry on next cue
+            // Silent fail — will retry on next cue
         }
     }, [streamId]);
 
-    // â”€â”€â”€ Directive 013: Process timestamped transcription cue â”€â”€â”€
+    // ─── Directive 013: Process timestamped transcription cue ───
     const processTranscriptionCue = useCallback((transcript, cue) => {
         // Deduplicate: skip if same cue
         if (cue && cue.id === lastCueIdRef.current) return;
@@ -140,7 +140,7 @@ export default function SubtitleOverlay({
             if (cue?.scene) setSceneDesc(cue.scene);
             setCueVisible(true);
 
-            // Directive 016: Auto-clear after cue duration â€” no looping
+            // Directive 016: Auto-clear after cue duration — no looping
             // When cue expires, clear the display completely
             clearTimeout(cueTimerRef.current);
             const displayDuration = (cue?.duration || 5) * 1000;
@@ -161,9 +161,9 @@ export default function SubtitleOverlay({
         }, 100);
     }, [translateSpeech]);
 
-    // â”€â”€â”€ Directive 018: Transcribe ONLY with real audio data â”€â”€â”€
+    // ─── Directive 018: Transcribe ONLY with real audio data ───
     const transcribeAndTranslate = useCallback(async (audioBlob) => {
-        // D018: Hard requirement â€” no audio blob = no transcription
+        // D018: Hard requirement — no audio blob = no transcription
         if (!audioBlob || audioBlob.size === 0) return;
         try {
             const reader = new FileReader();
@@ -187,15 +187,15 @@ export default function SubtitleOverlay({
             if (data.success && data.transcript) {
                 processTranscriptionCue(data.transcript, data.cue || null);
             } else if (!data.success && data.error) {
-                console.error('[SubtitleOverlay] Whisper error:', data.error);
-                setStatusText('⚠ ' + data.error);
+                console.error("[SubtitleOverlay] Whisper error:", data.error);
+                setStatusText("\u26a0 " + data.error);
             }
         } catch (err) {
-            console.error('[SubtitleOverlay] Transcription failed:', err);
+            console.error("[SubtitleOverlay] Transcription failed:", err);
         }
     }, [streamId, processTranscriptionCue]);
 
-    // â”€â”€â”€ Start MediaRecorder (ONLY path â€” real audio or nothing) â”€â”€â”€
+    // ─── Start MediaRecorder (ONLY path — real audio or nothing) ───
     const startRecorderProcessing = useCallback(() => {
         if (!mediaStream || processingRef.current) return;
         try {
@@ -209,15 +209,15 @@ export default function SubtitleOverlay({
             recorderRef.current = recorder;
             processingRef.current = true;
             setIsProcessing(true);
-            setStatusText("ðŸ“¡ Live â€” Whisper STT processing audio");
+            setStatusText("📡 Live — Whisper STT processing audio");
         } catch (err) {
             console.error("[SubtitleOverlay] MediaRecorder error:", err);
         }
     }, [mediaStream, transcribeAndTranslate]);
 
-    // D018: PURGED â€” startPeriodicProcessing DELETED (was the simulation loop)
+    // D018: PURGED — startPeriodicProcessing DELETED (was the simulation loop)
 
-    // â”€â”€â”€ Stop all processing â”€â”€â”€
+    // ─── Stop all processing ───
     const stopProcessing = useCallback(() => {
         processingRef.current = false;
         setIsProcessing(false);
@@ -231,13 +231,13 @@ export default function SubtitleOverlay({
         }
     }, []);
 
-    // â”€â”€â”€ YouTube Tab Audio Capture (cross-origin workaround) â”€â”€â”€
+    // ─── YouTube Tab Audio Capture (cross-origin workaround) ───
     const startTabRecorderProcessing = useCallback(() => {
         if (!tabStreamRef.current || processingRef.current) return;
         try {
             const audioTracks = tabStreamRef.current.getAudioTracks();
             if (audioTracks.length === 0) {
-                setStatusText("âš  No audio track â€” ensure 'Share audio' is checked");
+                setStatusText("⚠ No audio track — ensure 'Share audio' is checked");
                 return;
             }
             const audioStream = new MediaStream(audioTracks);
@@ -251,16 +251,16 @@ export default function SubtitleOverlay({
             recorderRef.current = recorder;
             processingRef.current = true;
             setIsProcessing(true);
-            setStatusText("ðŸ“¡ Live â€” Whisper STT processing YouTube audio");
+            setStatusText("📡 Live — Whisper STT processing YouTube audio");
         } catch (err) {
             console.error("[SubtitleOverlay] Tab recorder error:", err);
-            setStatusText("âš  Failed to process tab audio");
+            setStatusText("⚠ Failed to process tab audio");
         }
     }, [transcribeAndTranslate]);
 
     const handleYouTubeCapture = useCallback(async () => {
         try {
-            setStatusText("ðŸ“¡ Requesting tab audio accessâ€¦");
+            setStatusText("📡 Requesting tab audio access…");
             const stream = await navigator.mediaDevices.getDisplayMedia({
                 video: true,
                 audio: true,
@@ -274,34 +274,34 @@ export default function SubtitleOverlay({
                     tabStreamRef.current = null;
                     setHasTabStream(false);
                     stopProcessing();
-                    setStatusText("ðŸ”Š Tab sharing ended â€” tap to re-enable");
+                    setStatusText("🔊 Tab sharing ended — tap to re-enable");
                 };
             });
             setTimeout(() => startTabRecorderProcessing(), 300);
         } catch (err) {
             console.error("[SubtitleOverlay] Tab capture denied:", err);
-            setStatusText("âš  Permission denied â€” tap to retry");
+            setStatusText("⚠ Permission denied — tap to retry");
         }
     }, [startTabRecorderProcessing, stopProcessing]);
 
-    // â”€â”€â”€ Directive 018: Hardware-lock to video play state â”€â”€â”€
+    // ─── Directive 018: Hardware-lock to video play state ───
     // When paused: stop recorder, clear display instantly
     // When playing: restart recorder from current audio point
     useEffect(() => {
         if (!enabled) return;
 
         if (!isPlaying) {
-            // VIDEO PAUSED â†’ instant idle + clear
+            // VIDEO PAUSED → instant idle + clear
             stopProcessing();
             setCueVisible(false);
             setCurrentCue(null);
             setTranslatedText("");
             setSceneDesc("");
-            setStatusText("â¸ Paused â€” Subtitle engine idle");
+            setStatusText("⏸ Paused — Subtitle engine idle");
             return;
         }
 
-        // VIDEO PLAYING â†’ attempt to start recorder
+        // VIDEO PLAYING → attempt to start recorder
         if (!hasInteracted) return;
 
         if (isYouTubeMode) {
@@ -310,7 +310,7 @@ export default function SubtitleOverlay({
                 const timer = setTimeout(() => startTabRecorderProcessing(), 300);
                 return () => clearTimeout(timer);
             }
-            setStatusText("ðŸ”Š Tap below to enable live YouTube subtitles");
+            setStatusText("🔊 Tap below to enable live YouTube subtitles");
             return;
         }
 
@@ -319,14 +319,14 @@ export default function SubtitleOverlay({
             return () => clearTimeout(timer);
         } else {
             onStartCapture?.();
-            setStatusText("ðŸ“¡ Connecting to internal audio bufferâ€¦");
+            setStatusText("📡 Connecting to internal audio buffer…");
         }
     }, [enabled, isPlaying, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, startTabRecorderProcessing, onStartCapture, stopProcessing]);
 
-    // â”€â”€â”€ Stop when disabled â”€â”€â”€
+    // ─── Stop when disabled ───
     useEffect(() => { if (!enabled) stopProcessing(); }, [enabled, stopProcessing]);
 
-    // â”€â”€â”€ Cleanup â”€â”€â”€
+    // ─── Cleanup ───
     useEffect(() => {
         return () => {
             processingRef.current = false;
@@ -343,12 +343,12 @@ export default function SubtitleOverlay({
         };
     }, []);
 
-    // â”€â”€â”€ Re-translate on target language change â”€â”€â”€
+    // ─── Re-translate on target language change ───
     useEffect(() => {
         if (currentCue?.text) translateSpeech(currentCue.text);
     }, [targetLang]);
 
-    // â”€â”€â”€ Restart processing on source language change â”€â”€â”€
+    // ─── Restart processing on source language change ───
     useEffect(() => {
         if (processingRef.current) stopProcessing();
     }, [sourceLang, stopProcessing]);
@@ -364,7 +364,7 @@ export default function SubtitleOverlay({
                         className={`subtitle-stream-indicator ${isProcessing ? "active" : ""}`}
                         title={isProcessing ? "Internal stream active" : "Waiting for interaction"}
                     >
-                        <span className="subtitle-stream-icon">{isProcessing ? "ðŸ“¡" : "â³"}</span>
+                        <span className="subtitle-stream-icon">{isProcessing ? "📡" : "⏳"}</span>
                         <span className="subtitle-stream-label">{isProcessing ? "LIVE" : "READY"}</span>
                     </div>
 
@@ -381,7 +381,7 @@ export default function SubtitleOverlay({
                         </select>
                     </div>
 
-                    <span className="subtitle-arrow">â†’</span>
+                    <span className="subtitle-arrow">→</span>
 
                     <div className="subtitle-lang-selector">
                         <label className="subtitle-lang-label">To</label>
@@ -398,17 +398,17 @@ export default function SubtitleOverlay({
 
                     {vetted && (
                         <div className="vetting-badge">
-                            <span className="vetting-badge-icon">ðŸ›¡ï¸</span>
-                            <span className="vetting-badge-text">Vetted âœ“</span>
+                            <span className="vetting-badge-icon">🛡️</span>
+                            <span className="vetting-badge-text">Vetted ✓</span>
                         </div>
                     )}
-                    <div className="glossary-lock-badge"><span>ðŸ”’</span></div>
+                    <div className="glossary-lock-badge"><span>🔒</span></div>
                     {streamTier && <div className={`subtitle-tier-badge tier-${streamTier}`}>T{streamTier}</div>}
-                    <div className="subtitle-no-mic-badge" title="No microphone â€” internal stream">ðŸš«ðŸŽ™ï¸</div>
-                    <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">âœ•</button>
+                    <div className="subtitle-no-mic-badge" title="No microphone — internal stream">🚫🎙️</div>
+                    <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
-                {/* Directive 013: Live Subtitle Display â€” Timestamped Cues + RTL */}
+                {/* Directive 013: Live Subtitle Display — Timestamped Cues + RTL */}
                 <div className={`subtitle-cue-container ${cueVisible ? "cue-visible" : "cue-hidden"}`}>
                     {captureError ? (
                         <div className="subtitle-error">{captureError}</div>
@@ -437,17 +437,17 @@ export default function SubtitleOverlay({
                                     {renderSubtitleText(translatedText)}
                                 </div>
                             ) : (
-                                <div className="subtitle-translated subtitle-translating">Translatingâ€¦</div>
+                                <div className="subtitle-translated subtitle-translating">Translating…</div>
                             )}
 
                             {/* Directive 013: Scene description + sacred term count */}
                             <div className="subtitle-meta-row">
                                 {sceneDesc && (
-                                    <span className="subtitle-scene">ðŸŽ¬ {sceneDesc}</span>
+                                    <span className="subtitle-scene">🎬 {sceneDesc}</span>
                                 )}
                                 {sacredTermCount > 0 && (
                                     <span className="subtitle-sacred-note">
-                                        ðŸ”’ {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked
+                                        🔒 {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked
                                     </span>
                                 )}
                             </div>
@@ -457,7 +457,7 @@ export default function SubtitleOverlay({
                             {statusText}
                             {isYouTubeMode && !hasTabStream && !isProcessing && (
                                 <button className="yt-capture-btn" onClick={handleYouTubeCapture}>
-                                    ðŸ”Š Enable Live Subtitles
+                                    🔊 Enable Live Subtitles
                                 </button>
                             )}
                         </div>
@@ -466,10 +466,10 @@ export default function SubtitleOverlay({
 
                 {/* Sovereignty Badge */}
                 <div className="subtitle-sovereignty-badge">
-                    <span>ðŸ›¡ï¸ Internal Audio â€” No Microphone Required</span>
+                    <span>🛡️ Internal Audio — No Microphone Required</span>
                     {currentCue?.startTime != null && (
                         <span className="subtitle-timestamp">
-                            â± {formatTimestamp(currentCue.startTime)}â€“{formatTimestamp(currentCue.endTime)}
+                            ⏱ {formatTimestamp(currentCue.startTime)}–{formatTimestamp(currentCue.endTime)}
                         </span>
                     )}
                 </div>
@@ -593,7 +593,7 @@ export default function SubtitleOverlay({
                     color: white;
                 }
 
-                /* â”€â”€ Directive 013+016: Cue Container with Fade Transitions â”€â”€ */
+                /* ── Directive 013+016: Cue Container with Fade Transitions ── */
                 .subtitle-cue-container {
                     padding: 6px 0;
                     min-height: 52px;
@@ -664,7 +664,7 @@ export default function SubtitleOverlay({
                     transform: scale(0.98);
                 }
 
-                /* â”€â”€ Directive 013: Scene Description & Meta Row â”€â”€ */
+                /* ── Directive 013: Scene Description & Meta Row ── */
                 .subtitle-meta-row {
                     display: flex;
                     align-items: center;
@@ -682,7 +682,7 @@ export default function SubtitleOverlay({
                     color: rgba(34, 197, 94, 0.6);
                 }
 
-                /* â”€â”€ Sovereignty Badge with Timestamp â”€â”€ */
+                /* ── Sovereignty Badge with Timestamp ── */
                 .subtitle-sovereignty-badge {
                     display: flex;
                     align-items: center;
@@ -715,7 +715,7 @@ export default function SubtitleOverlay({
     );
 }
 
-// Directive 013: Format seconds â†’ MM:SS
+// Directive 013: Format seconds → MM:SS
 function formatTimestamp(seconds) {
     if (seconds == null || isNaN(seconds)) return "0:00";
     const m = Math.floor(seconds / 60);
