@@ -86,19 +86,19 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
         let transcript = (data.text || "").trim();
         const noisePatterns = [
             /\[?AUTHORWAVE\]?/gi,
-            /\[?SUBTITLES?\]?/gi,           // [SUBTITLES], [SUBTITLE], SUBTITLES
+            /\[?SUBTITLES?\]?/gi,
             /\[?subscribe\]?/gi,
             /like and share/gi,
             /click the bell/gi,
             /thank you for watching/gi,
             /σας ευχαριστ[ωώ] που παρακολουθ/gi,
-            /[υΥ]ποτ[ιί]τλοι/gi,            // Υποτίτλοι in any casing
+            /[υΥ]ποτ[ιί]τλοι/gi,
             /[σΣ]υνεχ[ιί]ζεται/gi,
-            /#+\s*\d+/g,                     // #1 #2 ## 3 etc.
-            /^\s*\d+\.?\s*$/gm,              // standalone numbers like "1." or "2"
+            /[#\s,\d]+##/g,                  // # 1,2,3,4,5 ## patterns
+            /^\s*[#\d\s,.\-]+\s*$/gm,        // lines of only #, numbers, commas, dots
             /^\s*#{1,3}\s+/gm,               // markdown headers ## text
             /\.{3,}/g,                        // trailing ellipsis artifacts
-            /^\s*[\[\(].*[\]\)]\s*$/gm,      // lines that are entirely [bracketed] or (parenthesized)
+            /^\s*[\[\(].*[\]\)]\s*$/gm,       // entirely [bracketed] or (parenthesized) lines
         ];
         for (const pattern of noisePatterns) {
             transcript = transcript.replace(pattern, "").trim();
