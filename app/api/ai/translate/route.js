@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { translateText, generateSubtitles, SUPPORTED_LANGUAGES, detectSacredTerms, sanitizeTheologicalOutput } from "@/lib/patristic-ai";
+import { SUPPORTED_LANGUAGES, detectSacredTerms, sanitizeTheologicalOutput } from "@/lib/patristic-ai";
 
 /**
  * POST /api/ai/translate

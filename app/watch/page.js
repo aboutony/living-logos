@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import SovereignPlayer from "../components/SovereignPlayer";
 import LiquidToggle from "../components/LiquidToggle";
-import SyncOverlay from "../components/SyncOverlay";
 import DigitalSeal from "../components/DigitalSeal";
 
 /**
@@ -32,8 +31,6 @@ function WatchContent() {
 
   const [stream, setStream] = useState(null);
   const [isAudioOnly, setIsAudioOnly] = useState(startAudio);
-  const [showSync, setShowSync] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
   const [loading, setLoading] = useState(true);
   const [taperLoading, setTaperLoading] = useState(false);
   const [taperSuccess, setTaperSuccess] = useState(null);
@@ -54,14 +51,6 @@ function WatchContent() {
     }
     fetchStream();
   }, [streamId]);
-
-  // Simulate playback time for sync overlay
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   // ── Light a Candle — POST to Stewardship API ──
   async function handleLightCandle(amount) {
@@ -116,9 +105,7 @@ function WatchContent() {
           autoSubtitles={stream?.authority?.level <= 2}
           streamTier={stream?.authority?.level}
           youtubeChannel={stream?.youtubeChannel}
-        >
-          {showSync && <SyncOverlay isVisible={showSync} currentTime={currentTime} />}
-        </SovereignPlayer>
+        />
       </div>
 
       {/* ═══════════════════════════════════════
@@ -128,12 +115,6 @@ function WatchContent() {
         {/* ── Liquid Toggle + Sync ── */}
         <div className="watch-controls">
           <LiquidToggle isAudioOnly={isAudioOnly} onToggle={setIsAudioOnly} />
-          <button
-            className={`btn ${showSync ? "btn-gold" : "btn-outline"} btn-sm`}
-            onClick={() => setShowSync(!showSync)}
-          >
-            📜 Sync
-          </button>
         </div>
 
         {/* ── Stream Info ── */}
