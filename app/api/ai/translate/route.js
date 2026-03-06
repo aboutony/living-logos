@@ -63,7 +63,33 @@ export async function POST(request) {
                 if (tmData.responseData?.translatedText &&
                     tmData.responseData.translatedText !== text &&
                     !tmData.responseData.translatedText.startsWith("MYMEMORY WARNING")) {
-                    translatedText = tmData.responseData.translatedText;
+                    let candidate = tmData.responseData.translatedText;
+
+                    // Strip noise patterns that MyMemory injects on failure
+                    const translationNoise = [
+                        /\[?SUBTITLES?\]?/gi,
+                        /\[?AUTHORWAVE\]?/gi,
+                        /\[?subscribe\]?/gi,
+                        /[υΥ]ποτ[ιί]τλοι/gi,
+                        /[#\s,\d]+##/g,
+                        /^\s*[#\d\s,.\-]+\s*$/gm,
+                        /^\s*[\[\(].*[\]\)]\s*$/gm,
+                        /\.{3,}/g,
+                    ];
+                    for (const pattern of translationNoise) {
+                        candidate = candidate.replace(pattern, "").trim();
+                    }
+
+                    // Quality gate: measure letter-to-noise ratio
+                    // If less than 40% of characters are actual letters, reject the translation
+                    const letters = (candidate.match(/[\p{L}]/gu) || []).length;
+                    const totalChars = candidate.length;
+                    const letterRatio = totalChars > 0 ? letters / totalChars : 0;
+
+                    if (candidate.length > 1 && letterRatio > 0.4) {
+                        translatedText = candidate;
+                    }
+                    // else: fall back to original text (translatedText stays as `text`)
                 }
             }
         } catch {
