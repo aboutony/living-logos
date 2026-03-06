@@ -205,11 +205,23 @@ export default function SubtitleOverlay({
             recorder.ondataavailable = (event) => {
                 if (event.data && event.data.size > 0) transcribeAndTranslate(event.data);
             };
-            recorder.start(3000); // 3-second chunks sent to Whisper
+            // Restart recording after each stop to produce complete valid files
+            recorder.onstop = () => {
+                if (processingRef.current && recorderRef.current) {
+                    try { recorderRef.current.start(); } catch { }
+                }
+            };
+            recorder.start(); // No timeslice — stop/start cycle produces valid files
             recorderRef.current = recorder;
             processingRef.current = true;
             setIsProcessing(true);
             setStatusText("📡 Live — Whisper STT processing audio");
+            // Stop every 4s → ondataavailable with complete WebM → onstop → restart
+            periodicTimerRef.current = setInterval(() => {
+                if (recorderRef.current && recorderRef.current.state === "recording") {
+                    recorderRef.current.stop();
+                }
+            }, 4000);
         } catch (err) {
             console.error("[SubtitleOverlay] MediaRecorder error:", err);
         }
@@ -247,11 +259,21 @@ export default function SubtitleOverlay({
             recorder.ondataavailable = (event) => {
                 if (event.data && event.data.size > 0) transcribeAndTranslate(event.data);
             };
-            recorder.start(3000);
+            recorder.onstop = () => {
+                if (processingRef.current && recorderRef.current) {
+                    try { recorderRef.current.start(); } catch { }
+                }
+            };
+            recorder.start(); // No timeslice — complete valid files each cycle
             recorderRef.current = recorder;
             processingRef.current = true;
             setIsProcessing(true);
             setStatusText("📡 Live — Whisper STT processing YouTube audio");
+            periodicTimerRef.current = setInterval(() => {
+                if (recorderRef.current && recorderRef.current.state === "recording") {
+                    recorderRef.current.stop();
+                }
+            }, 4000);
         } catch (err) {
             console.error("[SubtitleOverlay] Tab recorder error:", err);
             setStatusText("⚠ Failed to process tab audio");
