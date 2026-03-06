@@ -82,25 +82,16 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
 
         const data = await response.json();
 
-        // Filter out Whisper hallucination/noise phrases
+        // Light filter: only remove known Whisper silence hallucinations
+        // (GPT-4o-mini handles translation — no MyMemory noise to worry about)
         let transcript = (data.text || "").trim();
-        const noisePatterns = [
+        const whisperHallucinations = [
             /\[?AUTHORWAVE\]?/gi,
             /\[?SUBTITLES?\]?/gi,
             /\[?subscribe\]?/gi,
-            /like and share/gi,
-            /click the bell/gi,
-            /thank you for watching/gi,
-            /σας ευχαριστ[ωώ] που παρακολουθ/gi,
             /[υΥ]ποτ[ιί]τλοι/gi,
-            /[σΣ]υνεχ[ιί]ζεται/gi,
-            /[#\s,\d]+##/g,                  // # 1,2,3,4,5 ## patterns
-            /^\s*[#\d\s,.\-]+\s*$/gm,        // lines of only #, numbers, commas, dots
-            /^\s*#{1,3}\s+/gm,               // markdown headers ## text
-            /\.{3,}/g,                        // trailing ellipsis artifacts
-            /^\s*[\[\(].*[\]\)]\s*$/gm,       // entirely [bracketed] or (parenthesized) lines
         ];
-        for (const pattern of noisePatterns) {
+        for (const pattern of whisperHallucinations) {
             transcript = transcript.replace(pattern, "").trim();
         }
         // Skip empty or very short transcriptions after filtering

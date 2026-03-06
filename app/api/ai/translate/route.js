@@ -13,7 +13,7 @@ import { SUPPORTED_LANGUAGES, detectSacredTerms, sanitizeTheologicalOutput } fro
 export async function POST(request) {
     try {
         const body = await request.json();
-        const { text, sourceLang, targetLang, streamId } = body;
+        const { text, sourceLang, targetLang, streamId, context } = body;
 
         if (!text || typeof text !== "string") {
             return NextResponse.json(
@@ -75,6 +75,22 @@ export async function POST(request) {
                     "7. If you cannot translate a phrase, transliterate it — never output [SUBTITLE] or symbols.",
                 ].join("\n");
 
+                const messages = [
+                    { role: "system", content: systemPrompt },
+                ];
+                // Add rolling context if available (previous 2 chunks)
+                if (context && context.trim().length > 0) {
+                    messages.push({
+                        role: "user",
+                        content: `[Previous speech for context — do NOT translate this, only use for understanding]: ${context}`
+                    });
+                    messages.push({
+                        role: "assistant",
+                        content: "Understood. I will use this context to inform my translation of the next segment."
+                    });
+                }
+                messages.push({ role: "user", content: text });
+
                 const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
                     method: "POST",
                     headers: {
@@ -83,10 +99,7 @@ export async function POST(request) {
                     },
                     body: JSON.stringify({
                         model: "gpt-4o-mini",
-                        messages: [
-                            { role: "system", content: systemPrompt },
-                            { role: "user", content: text },
-                        ],
+                        messages,
                         max_tokens: 300,
                         temperature: 0.3,
                     }),

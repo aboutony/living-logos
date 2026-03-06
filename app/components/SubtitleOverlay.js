@@ -100,7 +100,7 @@ export default function SubtitleOverlay({
     const isSourceRTL = RTL_CODES.has(sourceLang);
 
     // ─── Translate via Patristic AI ───
-    const translateSpeech = useCallback(async (text, cueId) => {
+    const translateSpeech = useCallback(async (text, cueId, previousContext) => {
         if (!text || text.length < 2) return;
         try {
             const res = await fetch("/api/ai/translate", {
@@ -111,11 +111,11 @@ export default function SubtitleOverlay({
                     sourceLang: sourceLangRef.current,
                     targetLang: targetLangRef.current,
                     streamId,
+                    context: previousContext || "",
                 }),
             });
             const data = await res.json();
             if (data.success && data.translation) {
-                // Update the specific cue's translation in the queue
                 setCueQueue(prev => prev.map(c =>
                     c.id === cueId
                         ? { ...c, translated: data.translation.translatedText || text }
@@ -146,10 +146,13 @@ export default function SubtitleOverlay({
             translated: null, // fills in when translation arrives
             timestamp: Date.now(),
         };
-        setCueQueue(prev => [...prev.slice(-2), newCue]);
-
-        // Trigger translation immediately (no delay)
-        translateSpeech(transcript, cueId);
+        setCueQueue(prev => {
+            const updated = [...prev.slice(-2), newCue];
+            // Build rolling context from previous cues for GPT
+            const previousContext = prev.slice(-2).map(c => c.text).join(" ");
+            translateSpeech(transcript, cueId, previousContext);
+            return updated;
+        });
 
         // Auto-expire this cue after 10 seconds
         setTimeout(() => {
