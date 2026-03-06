@@ -91,6 +91,8 @@ export default function SubtitleOverlay({
     const targetLangRef = useRef(targetLang);
     const cueTimerRef = useRef(null);
     const lastCueIdRef = useRef(null);
+    const tabStreamRef = useRef(null);
+    const [hasTabStream, setHasTabStream] = useState(false);
 
     useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
     useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
@@ -226,6 +228,59 @@ export default function SubtitleOverlay({
         }
     }, []);
 
+    // ─── YouTube Tab Audio Capture (cross-origin workaround) ───
+    const startTabRecorderProcessing = useCallback(() => {
+        if (!tabStreamRef.current || processingRef.current) return;
+        try {
+            const audioTracks = tabStreamRef.current.getAudioTracks();
+            if (audioTracks.length === 0) {
+                setStatusText("⚠ No audio track — ensure 'Share audio' is checked");
+                return;
+            }
+            const audioStream = new MediaStream(audioTracks);
+            const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+                ? "audio/webm;codecs=opus" : "audio/webm";
+            const recorder = new MediaRecorder(audioStream, { mimeType, audioBitsPerSecond: 16000 });
+            recorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) transcribeAndTranslate(event.data);
+            };
+            recorder.start(3000);
+            recorderRef.current = recorder;
+            processingRef.current = true;
+            setIsProcessing(true);
+            setStatusText("📡 Live — Whisper STT processing YouTube audio");
+        } catch (err) {
+            console.error("[SubtitleOverlay] Tab recorder error:", err);
+            setStatusText("⚠ Failed to process tab audio");
+        }
+    }, [transcribeAndTranslate]);
+
+    const handleYouTubeCapture = useCallback(async () => {
+        try {
+            setStatusText("📡 Requesting tab audio access…");
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: true,
+                audio: true,
+                preferCurrentTab: true,
+            });
+            tabStreamRef.current = stream;
+            setHasTabStream(true);
+            // Listen for track end (user revokes sharing)
+            stream.getAudioTracks().forEach(track => {
+                track.onended = () => {
+                    tabStreamRef.current = null;
+                    setHasTabStream(false);
+                    stopProcessing();
+                    setStatusText("🔊 Tab sharing ended — tap to re-enable");
+                };
+            });
+            setTimeout(() => startTabRecorderProcessing(), 300);
+        } catch (err) {
+            console.error("[SubtitleOverlay] Tab capture denied:", err);
+            setStatusText("⚠ Permission denied — tap to retry");
+        }
+    }, [startTabRecorderProcessing, stopProcessing]);
+
     // ─── Directive 018: Hardware-lock to video play state ───
     // When paused: stop recorder, clear display instantly
     // When playing: restart recorder from current audio point
@@ -247,8 +302,12 @@ export default function SubtitleOverlay({
         if (!hasInteracted) return;
 
         if (isYouTubeMode) {
-            // D018: YouTube cross-origin — no audio capture possible
-            setStatusText("⚠ YouTube mode — live audio capture not available");
+            // YouTube cross-origin: use tab audio capture via getDisplayMedia
+            if (tabStreamRef.current) {
+                const timer = setTimeout(() => startTabRecorderProcessing(), 300);
+                return () => clearTimeout(timer);
+            }
+            setStatusText("🔊 Tap below to enable live YouTube subtitles");
             return;
         }
 
@@ -259,7 +318,7 @@ export default function SubtitleOverlay({
             onStartCapture?.();
             setStatusText("📡 Connecting to internal audio buffer…");
         }
-    }, [enabled, isPlaying, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, onStartCapture, stopProcessing]);
+    }, [enabled, isPlaying, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, startTabRecorderProcessing, onStartCapture, stopProcessing]);
 
     // ─── Stop when disabled ───
     useEffect(() => { if (!enabled) stopProcessing(); }, [enabled, stopProcessing]);
@@ -274,6 +333,10 @@ export default function SubtitleOverlay({
             clearTimeout(translateTimeout.current);
             clearTimeout(cueTimerRef.current);
             if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
+            if (tabStreamRef.current) {
+                tabStreamRef.current.getTracks().forEach(t => t.stop());
+                tabStreamRef.current = null;
+            }
         };
     }, []);
 
@@ -387,7 +450,14 @@ export default function SubtitleOverlay({
                             </div>
                         </>
                     ) : (
-                        <div className="subtitle-status">{statusText}</div>
+                        <div className="subtitle-status">
+                            {statusText}
+                            {isYouTubeMode && !hasTabStream && !isProcessing && (
+                                <button className="yt-capture-btn" onClick={handleYouTubeCapture}>
+                                    🔊 Enable Live Subtitles
+                                </button>
+                            )}
+                        </div>
                     )}
                 </div>
 
@@ -567,6 +637,28 @@ export default function SubtitleOverlay({
                     color: rgba(255, 255, 255, 0.4);
                     font-size: 13px;
                     text-align: center;
+                }
+                .yt-capture-btn {
+                    display: block;
+                    margin: 10px auto 0;
+                    padding: 10px 24px;
+                    background: linear-gradient(135deg, rgba(212, 168, 83, 0.2), rgba(212, 168, 83, 0.1));
+                    border: 1px solid rgba(212, 168, 83, 0.4);
+                    border-radius: 8px;
+                    color: var(--color-gold, #d4a853);
+                    font-size: 14px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                    min-height: 44px;
+                }
+                .yt-capture-btn:hover {
+                    background: linear-gradient(135deg, rgba(212, 168, 83, 0.3), rgba(212, 168, 83, 0.15));
+                    border-color: rgba(212, 168, 83, 0.6);
+                    transform: scale(1.02);
+                }
+                .yt-capture-btn:active {
+                    transform: scale(0.98);
                 }
 
                 /* ── Directive 013: Scene Description & Meta Row ── */
