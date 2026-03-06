@@ -314,9 +314,7 @@ export default function SubtitleOverlay({
         if (!isPlaying) {
             // VIDEO PAUSED → instant idle + clear
             stopProcessing();
-            setCueVisible(false);
-            setCurrentCue(null);
-            setTranslatedText("");
+            setCueQueue([]);
             setSceneDesc("");
             setStatusText("⏸ Paused — Subtitle engine idle");
             return;

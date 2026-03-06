@@ -3,41 +3,51 @@
 import { useState } from "react";
 
 /**
- * LiquidToggle — Persistent switch between Video and Audio-Only modes
- * Smooth crossfade with visual feedback.
+ * LiquidToggle — Directive 022: Tri-State Mode Selector
+ * Smooth crossfade between Video · Audio · Radio modes.
+ *
+ * Props:
+ *   mode: "video" | "audio" | "radio"
+ *   onToggle(mode): callback with new mode string
  */
-export default function LiquidToggle({ isAudioOnly, onToggle }) {
+
+const MODES = [
+  { key: "video", icon: "📺", label: "Video" },
+  { key: "audio", icon: "🎧", label: "Audio" },
+  { key: "radio", icon: "📻", label: "Radio" },
+];
+
+export default function LiquidToggle({ mode = "video", onToggle }) {
   const [animating, setAnimating] = useState(false);
 
-  function handleToggle() {
+  const activeIndex = MODES.findIndex((m) => m.key === mode);
+
+  function handleSelect(newMode) {
+    if (newMode === mode) return;
     setAnimating(true);
-    onToggle?.(!isAudioOnly);
+    onToggle?.(newMode);
     setTimeout(() => setAnimating(false), 500);
   }
 
   return (
     <div className={`liquid-toggle ${animating ? "animating" : ""}`}>
-      <button
-        className={`liquid-option ${!isAudioOnly ? "active" : ""}`}
-        onClick={() => !isAudioOnly || handleToggle()}
-      >
-        <span className="liquid-icon">📺</span>
-        <span className="liquid-label">Video</span>
-      </button>
-
-      <div className="liquid-divider" />
-
-      <button
-        className={`liquid-option ${isAudioOnly ? "active" : ""}`}
-        onClick={() => isAudioOnly || handleToggle()}
-      >
-        <span className="liquid-icon">🎧</span>
-        <span className="liquid-label">Audio</span>
-      </button>
+      {MODES.map((m, i) => (
+        <button
+          key={m.key}
+          className={`liquid-option ${mode === m.key ? "active" : ""}`}
+          onClick={() => handleSelect(m.key)}
+        >
+          <span className="liquid-icon">{m.icon}</span>
+          <span className="liquid-label">{m.label}</span>
+        </button>
+      ))}
 
       <div
         className="liquid-indicator"
-        style={{ transform: isAudioOnly ? "translateX(100%)" : "translateX(0)" }}
+        style={{
+          transform: `translateX(${activeIndex * 100}%)`,
+          width: `calc(${100 / MODES.length}% - 4px)`,
+        }}
       />
 
       <style jsx>{`
@@ -56,7 +66,7 @@ export default function LiquidToggle({ isAudioOnly, onToggle }) {
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 8px 20px;
+          padding: 8px 16px;
           min-height: 48px;
           font-size: var(--text-sm);
           font-weight: 600;
@@ -71,18 +81,16 @@ export default function LiquidToggle({ isAudioOnly, onToggle }) {
         .liquid-option.active {
           color: var(--text-on-gold);
         }
-        .liquid-divider {
-          width: 1px;
-          height: 20px;
-          background: var(--border-subtle);
-        }
         .liquid-indicator {
           position: absolute;
           top: 3px;
           left: 3px;
-          width: calc(50% - 3px);
           height: calc(100% - 6px);
-          background: linear-gradient(135deg, var(--color-gold) 0%, var(--color-gold-dim) 100%);
+          background: linear-gradient(
+            135deg,
+            var(--color-gold) 0%,
+            var(--color-gold-dim) 100%
+          );
           border-radius: var(--radius-full);
           transition: transform var(--duration-normal) var(--ease-spring);
           z-index: 1;
@@ -94,11 +102,15 @@ export default function LiquidToggle({ isAudioOnly, onToggle }) {
           font-size: var(--text-sm);
         }
         .liquid-toggle.animating {
-          box-shadow: 0 0 20px rgba(212, 168, 83, 0.20);
+          box-shadow: 0 0 20px rgba(212, 168, 83, 0.2);
         }
         @media (max-width: 480px) {
-          .liquid-label { display: none; }
-          .liquid-option { padding: 8px 14px; }
+          .liquid-label {
+            display: none;
+          }
+          .liquid-option {
+            padding: 8px 12px;
+          }
         }
       `}</style>
     </div>

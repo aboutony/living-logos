@@ -1,24 +1,26 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import SovereignPlayer from "../components/SovereignPlayer";
+import SovereignRadio from "../components/SovereignRadio";
 import LiquidToggle from "../components/LiquidToggle";
 import DigitalSeal from "../components/DigitalSeal";
 
 /**
  * Step 4 — Sovereign Player: Mobile-First Vertical Stack
+ * Directive 022: Unified Video/Audio/Radio with Liquid Toggle
  *
  * Layout (< 768px):
  *   64px Header
  *   ┌─────────────────────┐
- *   │  16:9 Video Player  │  (aspect-ratio: 16/9, width: 100vw)
+ *   │  16:9 Video Player  │  OR  Radio Panel
  *   ├─────────────────────┤
- *   │  Liquid Toggle      │  (48px min-height, thumb zone)
+ *   │  Liquid Toggle      │  (Video · Audio · Radio)
  *   │  Stream Info         │
- *   │  Digital Taper       │  (large rounded touch targets)
- *   │  Prayer Wall         │  (scrollable)
+ *   │  Digital Taper       │
+ *   │  Prayer Wall         │
  *   │  Digital Seal        │
  *   └─────────────────────┘
  *   72px Bottom Bar
@@ -28,13 +30,20 @@ function WatchContent() {
   const searchParams = useSearchParams();
   const streamId = searchParams.get("id");
   const startAudio = searchParams.get("audio") === "true";
+  const startRadio = searchParams.get("radio") === "true";
 
   const [stream, setStream] = useState(null);
-  const [isAudioOnly, setIsAudioOnly] = useState(startAudio);
+  const [playerMode, setPlayerMode] = useState(
+    startRadio ? "radio" : startAudio ? "audio" : "video"
+  );
   const [loading, setLoading] = useState(true);
   const [taperLoading, setTaperLoading] = useState(false);
   const [taperSuccess, setTaperSuccess] = useState(null);
   const [selectedAmount, setSelectedAmount] = useState(null);
+  const [nowPlaying, setNowPlaying] = useState(null);
+
+  const radioRef = useRef(null);
+  const metaPollRef = useRef(null);
 
   useEffect(() => {
     async function fetchStream() {
@@ -52,6 +61,46 @@ function WatchContent() {
     fetchStream();
   }, [streamId]);
 
+  // ── Directive 022: Poll ICY Metadata when Radio is active ──
+  useEffect(() => {
+    if (playerMode !== "radio" || !stream?.radioUrl) {
+      setNowPlaying(null);
+      if (metaPollRef.current) clearInterval(metaPollRef.current);
+      return;
+    }
+
+    async function fetchMeta() {
+      try {
+        const res = await fetch(
+          `/api/streams/radio-meta?url=${encodeURIComponent(stream.radioUrl)}`
+        );
+        const data = await res.json();
+        if (data.success && data.metadata) {
+          setNowPlaying({
+            title: data.metadata.title,
+            artist: data.metadata.artist || data.metadata.stationName,
+          });
+        }
+      } catch { /* silent */ }
+    }
+
+    fetchMeta();
+    metaPollRef.current = setInterval(fetchMeta, 15000);
+    return () => clearInterval(metaPollRef.current);
+  }, [playerMode, stream?.radioUrl]);
+
+  // ── Directive 022: Unified mode switching — mutual exclusion ──
+  const handleModeChange = useCallback(
+    (newMode) => {
+      // Pause radio when switching AWAY from radio
+      if (playerMode === "radio" && newMode !== "radio") {
+        radioRef.current?.pause();
+      }
+      setPlayerMode(newMode);
+    },
+    [playerMode]
+  );
+
   // ── Light a Candle — POST to Stewardship API ──
   async function handleLightCandle(amount) {
     if (taperLoading || !stream) return;
@@ -67,7 +116,6 @@ function WatchContent() {
       const data = await res.json();
       if (data.success) {
         setTaperSuccess(data);
-        // Auto-dismiss after 4 seconds
         setTimeout(() => {
           setTaperSuccess(null);
           setSelectedAmount(null);
@@ -92,29 +140,43 @@ function WatchContent() {
     );
   }
 
+  const isRadioMode = playerMode === "radio";
+  const isAudioOnly = playerMode === "audio";
+
   return (
     <div className="watch-page">
       {/* ═══════════════════════════════════════
-          16:9 VIDEO PLAYER — Full width, sticky on scroll
+          PLAYER AREA — Video/Audio OR Radio
           ═══════════════════════════════════════ */}
       <div className="watch-player-wrap">
-        <SovereignPlayer
-          src={null}
-          isAudioOnly={isAudioOnly}
-          streamId={stream?.id}
-          autoSubtitles={stream?.authority?.level <= 2}
-          streamTier={stream?.authority?.level}
-          youtubeChannel={stream?.youtubeChannel}
-        />
+        {isRadioMode ? (
+          <SovereignRadio
+            ref={radioRef}
+            radioUrl={stream?.radioUrl || null}
+            nowPlaying={nowPlaying}
+            streamName={stream?.name}
+            onPlay={() => { }}
+            onPause={() => { }}
+          />
+        ) : (
+          <SovereignPlayer
+            src={null}
+            isAudioOnly={isAudioOnly}
+            streamId={stream?.id}
+            autoSubtitles={stream?.authority?.level <= 2}
+            streamTier={stream?.authority?.level}
+            youtubeChannel={stream?.youtubeChannel}
+          />
+        )}
       </div>
 
       {/* ═══════════════════════════════════════
           CONTROLS + SCROLLABLE MODULES
           ═══════════════════════════════════════ */}
       <div className="watch-scroll-area">
-        {/* ── Liquid Toggle + Sync ── */}
+        {/* ── Liquid Toggle: Video · Audio · Radio ── */}
         <div className="watch-controls">
-          <LiquidToggle isAudioOnly={isAudioOnly} onToggle={setIsAudioOnly} />
+          <LiquidToggle mode={playerMode} onToggle={handleModeChange} />
         </div>
 
         {/* ── Stream Info ── */}
@@ -138,6 +200,9 @@ function WatchContent() {
               <span className={`badge badge-tier${stream.authority?.level || 3}`}>
                 Tier {stream.authority?.level || 3}
               </span>
+              {stream.radioUrl && (
+                <span className="badge badge-radio">📻 Radio Available</span>
+              )}
             </div>
           </div>
         )}
@@ -150,7 +215,6 @@ function WatchContent() {
             <strong>{stream?.name || "the streaming parish"}</strong>.
           </p>
 
-          {/* Taper success confirmation */}
           {taperSuccess && (
             <div className="taper-confirmation">
               <div className="taper-candle-pulse">🕯️</div>
@@ -229,7 +293,6 @@ function WatchContent() {
         /* ── PLAYER: 16:9 aspect ratio, full width ── */
         .watch-player-wrap {
           width: 100%;
-          aspect-ratio: 16 / 9;
           background: #000;
           flex-shrink: 0;
           position: relative;
@@ -293,6 +356,13 @@ function WatchContent() {
           flex-wrap: wrap;
           gap: 6px;
           margin-top: var(--space-sm);
+        }
+
+        /* ── Radio Available Badge ── */
+        :global(.badge-radio) {
+          background: rgba(212, 168, 83, 0.12) !important;
+          color: var(--color-gold) !important;
+          border: 1px solid rgba(212, 168, 83, 0.3) !important;
         }
 
         /* ── DIGITAL TAPER ── */
