@@ -74,13 +74,11 @@ export default function SubtitleOverlay({
     const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
     const [isProcessing, setIsProcessing] = useState(false);
-    // Directive 013: Timestamped cue state
-    const [currentCue, setCurrentCue] = useState(null);
-    const [translatedText, setTranslatedText] = useState("");
+    // Directive 013: Cue queue — show last 3 cues for readability
+    const [cueQueue, setCueQueue] = useState([]);
     const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
     const [statusText, setStatusText] = useState("📡 Waiting for first interaction…");
-    const [cueVisible, setCueVisible] = useState(false);
     const [sceneDesc, setSceneDesc] = useState("");
 
     const processingRef = useRef(false);
@@ -102,7 +100,7 @@ export default function SubtitleOverlay({
     const isSourceRTL = RTL_CODES.has(sourceLang);
 
     // ─── Translate via Patristic AI ───
-    const translateSpeech = useCallback(async (text) => {
+    const translateSpeech = useCallback(async (text, cueId) => {
         if (!text || text.length < 2) return;
         try {
             const res = await fetch("/api/ai/translate", {
@@ -117,7 +115,12 @@ export default function SubtitleOverlay({
             });
             const data = await res.json();
             if (data.success && data.translation) {
-                setTranslatedText(data.translation.translatedText || text);
+                // Update the specific cue's translation in the queue
+                setCueQueue(prev => prev.map(c =>
+                    c.id === cueId
+                        ? { ...c, translated: data.translation.translatedText || text }
+                        : c
+                ));
                 setSacredTermCount(data.translation.sacredTerms?.length || 0);
                 setVetted(data.translation.sacredTerms?.length > 0);
                 setStatusText("📡 Live — Translating internal stream");
@@ -133,32 +136,25 @@ export default function SubtitleOverlay({
         if (cue && cue.id === lastCueIdRef.current) return;
         if (cue) lastCueIdRef.current = cue.id;
 
-        // Fade in the new cue
-        setCueVisible(false);
+        const cueId = cue?.id || `cue-${Date.now()}`;
+        if (cue?.scene) setSceneDesc(cue.scene);
+
+        // Add to queue (keep last 3)
+        const newCue = {
+            id: cueId,
+            text: transcript,
+            translated: null, // fills in when translation arrives
+            timestamp: Date.now(),
+        };
+        setCueQueue(prev => [...prev.slice(-2), newCue]);
+
+        // Trigger translation immediately (no delay)
+        translateSpeech(transcript, cueId);
+
+        // Auto-expire this cue after 10 seconds
         setTimeout(() => {
-            setCurrentCue({ text: transcript, ...(cue || {}) });
-            if (cue?.scene) setSceneDesc(cue.scene);
-            setCueVisible(true);
-
-            // Directive 016: Auto-clear after cue duration — no looping
-            // When cue expires, clear the display completely
-            clearTimeout(cueTimerRef.current);
-            const displayDuration = (cue?.duration || 5) * 1000;
-            cueTimerRef.current = setTimeout(() => {
-                setCueVisible(false);
-                // Directive 016: Clear stale content after fade
-                setTimeout(() => {
-                    setCurrentCue(null);
-                    setTranslatedText("");
-                }, 400);
-            }, displayDuration - 500); // fade slightly before next cue
-        }, 150); // brief gap for fade transition
-
-        // Trigger translation
-        clearTimeout(translateTimeout.current);
-        translateTimeout.current = setTimeout(() => {
-            translateSpeech(transcript);
-        }, 100);
+            setCueQueue(prev => prev.filter(c => c.id !== cueId));
+        }, 10000);
     }, [translateSpeech]);
 
     // ─── Directive 018: Transcribe ONLY with real audio data ───
@@ -221,7 +217,7 @@ export default function SubtitleOverlay({
                 if (recorderRef.current && recorderRef.current.state === "recording") {
                     recorderRef.current.stop();
                 }
-            }, 4000);
+            }, 3000);
         } catch (err) {
             console.error("[SubtitleOverlay] MediaRecorder error:", err);
         }
@@ -273,7 +269,7 @@ export default function SubtitleOverlay({
                 if (recorderRef.current && recorderRef.current.state === "recording") {
                     recorderRef.current.stop();
                 }
-            }, 4000);
+            }, 3000);
         } catch (err) {
             console.error("[SubtitleOverlay] Tab recorder error:", err);
             setStatusText("⚠ Failed to process tab audio");
@@ -367,7 +363,7 @@ export default function SubtitleOverlay({
 
     // ─── Re-translate on target language change ───
     useEffect(() => {
-        if (currentCue?.text) translateSpeech(currentCue.text);
+        cueQueue.forEach(cue => translateSpeech(cue.text, cue.id));
     }, [targetLang]);
 
     // ─── Restart processing on source language change ───
@@ -430,50 +426,35 @@ export default function SubtitleOverlay({
                     <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
-                {/* Directive 013: Live Subtitle Display — Timestamped Cues + RTL */}
-                <div className={`subtitle-cue-container ${cueVisible ? "cue-visible" : "cue-hidden"}`}>
+                {/* Directive 013: Live Subtitle Display — Cue Queue + RTL */}
+                <div className="subtitle-cue-container cue-visible">
                     {captureError ? (
                         <div className="subtitle-error">{captureError}</div>
-                    ) : currentCue ? (
-                        <>
-                            {/* Original text (source language direction) */}
-                            <div
-                                className="subtitle-original"
-                                style={{
-                                    direction: isSourceRTL ? "rtl" : "ltr",
-                                    textAlign: isSourceRTL ? "right" : "left",
-                                }}
-                            >
-                                {currentCue.text}
-                            </div>
-
-                            {/* Translated text (target language direction) */}
-                            {translatedText ? (
-                                <div
-                                    className="subtitle-translated"
-                                    style={{
-                                        direction: isTargetRTL ? "rtl" : "ltr",
-                                        textAlign: isTargetRTL ? "right" : "left",
-                                    }}
-                                >
-                                    {renderSubtitleText(translatedText)}
+                    ) : cueQueue.length > 0 ? (
+                        <div className="subtitle-queue">
+                            {cueQueue.map((cue, idx) => (
+                                <div key={cue.id} className={`subtitle-queue-item ${idx === cueQueue.length - 1 ? 'latest' : 'older'}`}>
+                                    <div
+                                        className="subtitle-original"
+                                        style={{
+                                            direction: isSourceRTL ? "rtl" : "ltr",
+                                            textAlign: isSourceRTL ? "right" : "left",
+                                        }}
+                                    >
+                                        {cue.text}
+                                    </div>
+                                    <div
+                                        className={`subtitle-translated ${!cue.translated ? 'subtitle-translating' : ''}`}
+                                        style={{
+                                            direction: isTargetRTL ? "rtl" : "ltr",
+                                            textAlign: isTargetRTL ? "right" : "left",
+                                        }}
+                                    >
+                                        {cue.translated ? renderSubtitleText(cue.translated) : "Translating…"}
+                                    </div>
                                 </div>
-                            ) : (
-                                <div className="subtitle-translated subtitle-translating">Translating…</div>
-                            )}
-
-                            {/* Directive 013: Scene description + sacred term count */}
-                            <div className="subtitle-meta-row">
-                                {sceneDesc && (
-                                    <span className="subtitle-scene">🎬 {sceneDesc}</span>
-                                )}
-                                {sacredTermCount > 0 && (
-                                    <span className="subtitle-sacred-note">
-                                        🔒 {sacredTermCount} sacred term{sacredTermCount > 1 ? "s" : ""} locked
-                                    </span>
-                                )}
-                            </div>
-                        </>
+                            ))}
+                        </div>
                     ) : (
                         <div className="subtitle-status">
                             {statusText}
@@ -489,11 +470,6 @@ export default function SubtitleOverlay({
                 {/* Sovereignty Badge */}
                 <div className="subtitle-sovereignty-badge">
                     <span>🛡️ Internal Audio — No Microphone Required</span>
-                    {currentCue?.startTime != null && (
-                        <span className="subtitle-timestamp">
-                            ⏱ {formatTimestamp(currentCue.startTime)}–{formatTimestamp(currentCue.endTime)}
-                        </span>
-                    )}
                 </div>
             </div>
 
@@ -636,6 +612,30 @@ export default function SubtitleOverlay({
                     margin-bottom: 3px;
                     line-height: 1.4;
                     transition: direction 0.3s;
+                }
+                .subtitle-queue {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+                .subtitle-queue-item {
+                    padding: 4px 0;
+                    border-bottom: 1px solid rgba(255,255,255,0.05);
+                    animation: cueSlideIn 0.3s ease-out;
+                    transition: opacity 0.4s ease;
+                }
+                .subtitle-queue-item.older {
+                    opacity: 0.45;
+                }
+                .subtitle-queue-item.latest {
+                    opacity: 1;
+                }
+                .subtitle-queue-item:last-child {
+                    border-bottom: none;
+                }
+                @keyframes cueSlideIn {
+                    from { opacity: 0; transform: translateY(8px); }
+                    to { opacity: 1; transform: translateY(0); }
                 }
                 .subtitle-translated {
                     font-size: 24px;
