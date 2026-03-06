@@ -73,8 +73,9 @@ function YouTubePlayerMode({
           allowFullScreen
           frameBorder="0"
         />
-        {/* Subtitle Overlay — YouTube mode with periodic transcription */}
+        {/* Subtitle Overlay — YouTube mode */}
         {/* Directive 017: key forces remount on video change (multi-video purge) */}
+        {/* Directive 018: isPlaying tied to video state */}
         <SubtitleOverlay
           key={`yt-sub-${activeVideo?.videoId}`}
           streamId={streamId || "stream-rumorthodox"}
@@ -87,6 +88,7 @@ function YouTubePlayerMode({
           onStartCapture={() => { }}
           isYouTubeMode={true}
           hasInteracted={hasInteracted}
+          isPlaying={true}
         />
       </div>
 
@@ -353,7 +355,7 @@ export default function SovereignPlayer({
 
       {children}
 
-      {/* Patristic AI Subtitle Overlay — Directive 011+012+017 */}
+      {/* Patristic AI Subtitle Overlay — Directives 011+012+017+018 */}
       {!youtubeChannel && (
         <SubtitleOverlay
           key={`sub-${subtitleKey}`}
@@ -367,6 +369,7 @@ export default function SovereignPlayer({
           onStartCapture={startCapture}
           isYouTubeMode={false}
           hasInteracted={hasInteracted}
+          isPlaying={isPlaying}
         />
       )}
 

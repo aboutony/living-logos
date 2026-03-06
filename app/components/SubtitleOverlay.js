@@ -3,12 +3,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Directives 011, 012, 013 & 016
+ * SubtitleOverlay — Directives 011, 012, 013, 016 & 018
  *
  * 011: Internal digital audio stream processing, no microphone
  * 012: Zero-click activation on first user interaction
  * 013: Real-Time Sync with timestamped cues + RTL auto-detection
  * 016: Sacred Glossary Enforcement, 50% font increase, anti-loop real-time sync
+ * 018: Hardware-locked — 0% functional without live audio feed.
+ *      Tied to HTMLMediaElement.currentTime. Pause → idle + clear.
  *
  * RTL Languages: Arabic (ar), Persian (fa), Hebrew (he), Urdu (ur)
  * Automatically applies `direction: rtl` and `text-align: right` for these.
@@ -67,6 +69,7 @@ export default function SubtitleOverlay({
     onStartCapture,
     isYouTubeMode,
     hasInteracted,
+    isPlaying = false, // Directive 018: hardware-lock to video state
 }) {
     const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
@@ -156,20 +159,17 @@ export default function SubtitleOverlay({
         }, 100);
     }, [translateSpeech]);
 
-    // ─── Transcribe (with timestamp support) ───
+    // ─── Directive 018: Transcribe ONLY with real audio data ───
     const transcribeAndTranslate = useCallback(async (audioBlob) => {
+        // D018: Hard requirement — no audio blob = no transcription
+        if (!audioBlob || audioBlob.size === 0) return;
         try {
-            let audioData;
-            if (audioBlob) {
-                const reader = new FileReader();
-                const base64Promise = new Promise((resolve) => {
-                    reader.onloadend = () => resolve(reader.result.split(",")[1]);
-                    reader.readAsDataURL(audioBlob);
-                });
-                audioData = await base64Promise;
-            } else {
-                audioData = btoa("periodic-stream-chunk");
-            }
+            const reader = new FileReader();
+            const base64Promise = new Promise((resolve) => {
+                reader.onloadend = () => resolve(reader.result.split(",")[1]);
+                reader.readAsDataURL(audioBlob);
+            });
+            const audioData = await base64Promise;
 
             const res = await fetch("/api/ai/transcribe", {
                 method: "POST",
@@ -183,15 +183,14 @@ export default function SubtitleOverlay({
             });
             const data = await res.json();
             if (data.success && data.transcript) {
-                // Directive 013: Use timestamped cue
                 processTranscriptionCue(data.transcript, data.cue || null);
             }
         } catch {
-            // Silent — will retry on next chunk
+            // Silent — will retry on next real chunk
         }
     }, [streamId, processTranscriptionCue]);
 
-    // ─── Start MediaRecorder (native video) ───
+    // ─── Start MediaRecorder (ONLY path — real audio or nothing) ───
     const startRecorderProcessing = useCallback(() => {
         if (!mediaStream || processingRef.current) return;
         try {
@@ -201,29 +200,17 @@ export default function SubtitleOverlay({
             recorder.ondataavailable = (event) => {
                 if (event.data && event.data.size > 0) transcribeAndTranslate(event.data);
             };
-            recorder.start(3000); // 3-second chunks for ≤3s latency
+            recorder.start(3000); // 3-second chunks sent to Whisper
             recorderRef.current = recorder;
             processingRef.current = true;
             setIsProcessing(true);
-            setStatusText("📡 Live — Processing internal audio stream");
+            setStatusText("📡 Live — Whisper STT processing audio");
         } catch (err) {
             console.error("[SubtitleOverlay] MediaRecorder error:", err);
         }
     }, [mediaStream, transcribeAndTranslate]);
 
-    // ─── Start periodic transcription (YouTube / cross-origin) ───
-    const startPeriodicProcessing = useCallback(() => {
-        if (processingRef.current) return;
-        processingRef.current = true;
-        setIsProcessing(true);
-        setStatusText("📡 Live — Processing stream audio");
-
-        // Fire immediately, then every 4 seconds
-        transcribeAndTranslate(null);
-        periodicTimerRef.current = setInterval(() => {
-            if (processingRef.current) transcribeAndTranslate(null);
-        }, 4000);
-    }, [transcribeAndTranslate]);
+    // D018: PURGED — startPeriodicProcessing DELETED (was the simulation loop)
 
     // ─── Stop all processing ───
     const stopProcessing = useCallback(() => {
@@ -239,22 +226,40 @@ export default function SubtitleOverlay({
         }
     }, []);
 
-    // ─── Auto-activate when enabled + interacted ───
+    // ─── Directive 018: Hardware-lock to video play state ───
+    // When paused: stop recorder, clear display instantly
+    // When playing: restart recorder from current audio point
     useEffect(() => {
-        if (!enabled || !hasInteracted) return;
-        if (processingRef.current) return;
+        if (!enabled) return;
+
+        if (!isPlaying) {
+            // VIDEO PAUSED → instant idle + clear
+            stopProcessing();
+            setCueVisible(false);
+            setCurrentCue(null);
+            setTranslatedText("");
+            setSceneDesc("");
+            setStatusText("⏸ Paused — Subtitle engine idle");
+            return;
+        }
+
+        // VIDEO PLAYING → attempt to start recorder
+        if (!hasInteracted) return;
 
         if (isYouTubeMode) {
-            const timer = setTimeout(() => startPeriodicProcessing(), 300);
-            return () => clearTimeout(timer);
-        } else if (mediaStream) {
+            // D018: YouTube cross-origin — no audio capture possible
+            setStatusText("⚠ YouTube mode — live audio capture not available");
+            return;
+        }
+
+        if (mediaStream) {
             const timer = setTimeout(() => startRecorderProcessing(), 300);
             return () => clearTimeout(timer);
         } else {
             onStartCapture?.();
             setStatusText("📡 Connecting to internal audio buffer…");
         }
-    }, [enabled, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, startPeriodicProcessing, onStartCapture]);
+    }, [enabled, isPlaying, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, onStartCapture, stopProcessing]);
 
     // ─── Stop when disabled ───
     useEffect(() => { if (!enabled) stopProcessing(); }, [enabled, stopProcessing]);
