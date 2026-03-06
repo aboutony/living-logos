@@ -52,6 +52,21 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
         formData.append("language", whisperLang);
         formData.append("response_format", "verbose_json");
 
+        // Orthodox theology prompt — guides Whisper vocabulary for accurate transcription
+        // This prevents hallucinations and ensures proper Greek Orthodox terminology
+        formData.append("prompt",
+            "Greek Orthodox liturgical sermon. " +
+            "Speakers: Metropolitan, Bishop, Priest, Deacon, Monk. " +
+            "Saints: Ἅγιος Παΐσιος, Παΐσιος Αγιορείτης, Νεόφυτος, Μόρφου, Αθανάσιος, Βασίλειος, " +
+            "Γρηγόριος, Ιωάννης Χρυσόστομος, Μάξιμος Ομολογητής, Σεραφείμ Σαρώφ, " +
+            "Κοσμάς Αιτωλός, Πορφύριος Καυσοκαλυβίτης, Σωφρόνιος Σαχάρωφ, " +
+            "Ιουστίνος Πόποβιτς, Νικόλαος, Σπυρίδων, Νεκτάριος, Λουκάς Κριμαίας. " +
+            "Terms: Θεοτόκος, Θεία Λειτουργία, Εὐχαριστία, Θέωσις, Ἡσυχασμός, " +
+            "ὁμοούσιος, Χρίσμα, Πάσχα, Εἰκονοστάσιον, Μετάνοια, Ἀντίδωρον, " +
+            "Κύριε ἐλέησον, Χριστός Ανέστη, Εὐλογημένη ἡ Βασιλεία, " +
+            "Ἅγιον Ὄρος, Μονή, Σκήτη, Κελλί, Ιερά Σύνοδος."
+        );
+
         const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
             method: "POST",
             headers: {
@@ -66,9 +81,30 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
         }
 
         const data = await response.json();
+
+        // Filter out Whisper hallucination/noise phrases
+        let transcript = (data.text || "").trim();
+        const noisePatterns = [
+            /\bAUTHORWAVE\b/gi,
+            /\bsubscribe\b/gi,
+            /\blike and share\b/gi,
+            /\bclick the bell\b/gi,
+            /\bthank you for watching\b/gi,
+            /\bσας ευχαριστώ που παρακολουθ/gi,
+            /\bΥποτίτλοι\b/gi,
+            /\bΣυνεχίζεται\b/gi,
+        ];
+        for (const pattern of noisePatterns) {
+            transcript = transcript.replace(pattern, "").trim();
+        }
+        // Skip empty or very short transcriptions after filtering
+        if (transcript.length < 2) {
+            return { success: false, error: null }; // silent skip
+        }
+
         return {
             success: true,
-            transcript: data.text || "",
+            transcript,
             language: data.language || sourceLang,
             duration: data.duration || 3,
             segments: data.segments || [],
