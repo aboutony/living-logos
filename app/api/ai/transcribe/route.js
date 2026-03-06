@@ -86,6 +86,7 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
         let transcript = (data.text || "").trim();
         const noisePatterns = [
             /\bAUTHORWAVE\b/gi,
+            /\bSUBTITLE[S]?\b/gi,
             /\bsubscribe\b/gi,
             /\blike and share\b/gi,
             /\bclick the bell\b/gi,
@@ -93,6 +94,10 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
             /\bσας ευχαριστώ που παρακολουθ/gi,
             /\bΥποτίτλοι\b/gi,
             /\bΣυνεχίζεται\b/gi,
+            /#+\s*\d+/g,                    // #1 #2 ## 3 etc.
+            /^\s*\d+\.?\s*$/gm,             // standalone numbers like "1." or "2"
+            /^\s*#{1,3}\s+/gm,              // markdown headers ## text
+            /\.\.\./g,                       // trailing ellipsis artifacts
         ];
         for (const pattern of noisePatterns) {
             transcript = transcript.replace(pattern, "").trim();

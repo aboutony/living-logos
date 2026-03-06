@@ -435,22 +435,13 @@ export default function SubtitleOverlay({
                             {cueQueue.map((cue, idx) => (
                                 <div key={cue.id} className={`subtitle-queue-item ${idx === cueQueue.length - 1 ? 'latest' : 'older'}`}>
                                     <div
-                                        className="subtitle-original"
+                                        className="subtitle-translated"
                                         style={{
-                                            direction: isSourceRTL ? "rtl" : "ltr",
-                                            textAlign: isSourceRTL ? "right" : "left",
+                                            direction: (cue.translated ? isTargetRTL : isSourceRTL) ? "rtl" : "ltr",
+                                            textAlign: (cue.translated ? isTargetRTL : isSourceRTL) ? "right" : "left",
                                         }}
                                     >
-                                        {cue.text}
-                                    </div>
-                                    <div
-                                        className={`subtitle-translated ${!cue.translated ? 'subtitle-translating' : ''}`}
-                                        style={{
-                                            direction: isTargetRTL ? "rtl" : "ltr",
-                                            textAlign: isTargetRTL ? "right" : "left",
-                                        }}
-                                    >
-                                        {cue.translated ? renderSubtitleText(cue.translated) : "Translating…"}
+                                        {cue.translated ? renderSubtitleText(cue.translated) : cue.text}
                                     </div>
                                 </div>
                             ))}
