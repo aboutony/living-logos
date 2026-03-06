@@ -48,52 +48,61 @@ export async function POST(request) {
         const sacredTerms = detectSacredTerms(text);
         const glossaryApplied = [];
 
-        // Step 2: Get real translation from MyMemory API
+        // Step 2: Translate using OpenAI GPT-4o-mini — contextual, theology-aware
         let translatedText = text;
-        try {
-            const langPair = `${sourceLang}|${targetLang}`;
-            const apiUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${encodeURIComponent(langPair)}`;
-            const tmRes = await fetch(apiUrl, {
-                headers: { "User-Agent": "LivingLogos/1.0" },
-                signal: AbortSignal.timeout(5000),
-            });
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (apiKey) {
+            try {
+                const targetLangName = SUPPORTED_LANGUAGES.find(l => l.code === targetLang)?.name || targetLang;
+                const sourceLangName = SUPPORTED_LANGUAGES.find(l => l.code === sourceLang)?.name || sourceLang;
 
-            if (tmRes.ok) {
-                const tmData = await tmRes.json();
-                if (tmData.responseData?.translatedText &&
-                    tmData.responseData.translatedText !== text &&
-                    !tmData.responseData.translatedText.startsWith("MYMEMORY WARNING")) {
-                    let candidate = tmData.responseData.translatedText;
+                const systemPrompt = [
+                    `You are a Greek Orthodox theological translator. Translate from ${sourceLangName} to ${targetLangName}.`,
+                    "",
+                    "RULES:",
+                    "1. Translate MEANING and CONTEXT, not word-by-word.",
+                    "2. You are an expert in Orthodox Christianity — Patristics, liturgy, hagiography, and dogma.",
+                    "3. Saint names MUST use their correct international transliterations:",
+                    "   Παΐσιος = Paisios (NEVER Baisios), Νεόφυτος = Neophytos, Πορφύριος = Porphyrios,",
+                    "   Χρυσόστομος = Chrysostom, Αθανάσιος = Athanasios, Βασίλειος = Basil,",
+                    "   Γρηγόριος = Gregory, Νεκτάριος = Nectarios, Σπυρίδων = Spyridon,",
+                    "   Κοσμάς Αιτωλός = Kosmas Aitolos, Σεραφείμ Σαρώφ = Seraphim of Sarov,",
+                    "   Λουκάς Κριμαίας = Luke of Crimea, Σωφρόνιος = Sophrony.",
+                    "4. Theological terms: Θεοτόκος = Theotokos (Mother of God), Θέωσις = Theosis (Deification),",
+                    "   Ἡσυχασμός = Hesychasm, Θεία Λειτουργία = Divine Liturgy, ὁμοούσιος = Consubstantial.",
+                    "5. Preserve the register and gravitas of ecclesiastical speech.",
+                    "6. Output ONLY the translation, no commentary, no brackets, no metadata.",
+                    "7. If you cannot translate a phrase, transliterate it — never output [SUBTITLE] or symbols.",
+                ].join("\n");
 
-                    // Strip noise patterns that MyMemory injects on failure
-                    const translationNoise = [
-                        /\[?SUBTITLES?\]?/gi,
-                        /\[?AUTHORWAVE\]?/gi,
-                        /\[?subscribe\]?/gi,
-                        /[υΥ]ποτ[ιί]τλοι/gi,
-                        /[#\s,\d]+##/g,
-                        /^\s*[#\d\s,.\-]+\s*$/gm,
-                        /^\s*[\[\(].*[\]\)]\s*$/gm,
-                        /\.{3,}/g,
-                    ];
-                    for (const pattern of translationNoise) {
-                        candidate = candidate.replace(pattern, "").trim();
+                const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${apiKey}`,
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        model: "gpt-4o-mini",
+                        messages: [
+                            { role: "system", content: systemPrompt },
+                            { role: "user", content: text },
+                        ],
+                        max_tokens: 300,
+                        temperature: 0.3,
+                    }),
+                    signal: AbortSignal.timeout(8000),
+                });
+
+                if (gptRes.ok) {
+                    const gptData = await gptRes.json();
+                    const translation = gptData.choices?.[0]?.message?.content?.trim();
+                    if (translation && translation.length > 1) {
+                        translatedText = translation;
                     }
-
-                    // Quality gate: measure letter-to-noise ratio
-                    // If less than 40% of characters are actual letters, reject the translation
-                    const letters = (candidate.match(/[\p{L}]/gu) || []).length;
-                    const totalChars = candidate.length;
-                    const letterRatio = totalChars > 0 ? letters / totalChars : 0;
-
-                    if (candidate.length > 1 && letterRatio > 0.4) {
-                        translatedText = candidate;
-                    }
-                    // else: fall back to original text (translatedText stays as `text`)
                 }
+            } catch {
+                // If GPT fails, fall back to original text
             }
-        } catch {
-            // If translation API fails, fall back to glossary-only approach
         }
 
         // Step 3: Enforce Sacred Glossary — replace any incorrect translations
@@ -183,7 +192,7 @@ export async function GET() {
     return NextResponse.json({
         engine: "Patristic AI — Phase Three (Live Translation)",
         status: "operational",
-        translationBackend: "MyMemory + Sacred Glossary Enforcement",
+        translationBackend: "OpenAI GPT-4o-mini + Sacred Glossary Enforcement",
         supportedLanguages: SUPPORTED_LANGUAGES,
         sacredGlossaryEnforced: true,
         vettingPipeline: "active",
