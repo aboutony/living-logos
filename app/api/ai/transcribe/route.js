@@ -39,59 +39,25 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
             return { success: false, error: "Audio chunk too small — no real audio data" };
         }
 
-        // Build multipart form data for the Whisper API
-        const boundary = "----WhisperBoundary" + Date.now();
         const ext = format === "ogg" ? "ogg" : format === "wav" ? "wav" : "webm";
         const mimeType = format === "ogg" ? "audio/ogg" : format === "wav" ? "audio/wav" : "audio/webm";
 
         // Language mapping for Whisper (ISO 639-1)
-        const whisperLang = sourceLang === "el" ? "el"
-            : sourceLang === "ar" ? "ar"
-                : sourceLang === "ru" ? "ru"
-                    : sourceLang || "el";
+        const whisperLang = sourceLang || "el";
 
-        const formParts = [];
-
-        // File part
-        formParts.push(
-            `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="file"; filename="chunk.${ext}"\r\n` +
-            `Content-Type: ${mimeType}\r\n\r\n`
-        );
-        formParts.push(audioBuffer);
-        formParts.push("\r\n");
-
-        // Model part
-        formParts.push(
-            `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n`
-        );
-
-        // Language part
-        formParts.push(
-            `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${whisperLang}\r\n`
-        );
-
-        // Response format
-        formParts.push(
-            `--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\nverbose_json\r\n`
-        );
-
-        // Close boundary
-        formParts.push(`--${boundary}--\r\n`);
-
-        // Combine all parts into a single buffer
-        const bodyParts = formParts.map(part =>
-            typeof part === "string" ? Buffer.from(part, "utf-8") : part
-        );
-        const body = Buffer.concat(bodyParts);
+        // Use native FormData + Blob (Node.js 18+)
+        const formData = new FormData();
+        formData.append("file", new Blob([audioBuffer], { type: mimeType }), `chunk.${ext}`);
+        formData.append("model", "whisper-1");
+        formData.append("language", whisperLang);
+        formData.append("response_format", "verbose_json");
 
         const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${apiKey}`,
-                "Content-Type": `multipart/form-data; boundary=${boundary}`,
             },
-            body,
+            body: formData,
         });
 
         if (!response.ok) {
