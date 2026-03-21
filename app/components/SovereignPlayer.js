@@ -168,6 +168,7 @@ export default function SovereignPlayer({
     needsInteraction,
     startCapture,
     stopCapture,
+    cleanupAudio,
   } = useAudioStreamCapture(videoRef, hasInteracted);
 
   // ─── Directive 012: Auto-enable subtitles once user interacts ───
@@ -203,6 +204,13 @@ export default function SovereignPlayer({
     setSubtitleKey((k) => k + 1);
   }, [src]);
 
+  // Atomic 01.1: Explicit disposal on unmount
+  useEffect(() => {
+    return () => {
+      cleanupAudio();
+    };
+  }, [cleanupAudio]);
+
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
@@ -211,6 +219,8 @@ export default function SovereignPlayer({
       setIsPlaying(true);
     } else {
       video.pause();
+      // Atomic 01.1: Explicit disposal on pause
+      cleanupAudio();
       setIsPlaying(false);
     }
   }

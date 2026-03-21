@@ -67,13 +67,16 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
                 connectedRef.current = true;
             }
 
-            // Create capture destination (provides a MediaStream)
+            // Safety guard: create fresh destination if previous was cleaned up
             if (!destinationRef.current) {
                 destinationRef.current = ctx.createMediaStreamDestination();
             }
 
             const source = sourceNodeRef.current;
             const destination = destinationRef.current;
+
+            // Disconnect first to prevent double-connections
+            try { source.disconnect(); } catch { /* not connected yet */ }
 
             // Connect: source → speakers (so user still hears audio)
             source.connect(ctx.destination);
@@ -92,9 +95,31 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
         }
     }, [mediaElementRef, captureStream, hasInteracted]);
 
-    const stopCapture = useCallback(() => {
+    // ─── Atomic 01.1: Explicit stream disposal ───
+    const cleanupAudio = useCallback(() => {
+        try {
+            // Disconnect source from capture destination (keep speaker connection alive)
+            if (sourceNodeRef.current && destinationRef.current) {
+                try { sourceNodeRef.current.disconnect(destinationRef.current); } catch { /* already disconnected */ }
+            }
+            // Stop all tracks on the capture stream to fully destroy it
+            if (destinationRef.current?.stream) {
+                destinationRef.current.stream.getTracks().forEach(t => t.stop());
+            }
+            // Null the destination so startCapture creates a fresh one
+            destinationRef.current = null;
+        } catch (err) {
+            console.error("[AudioStreamCapture] cleanupAudio error:", err);
+        }
+        // State reset — prevents "Cannot call write on destroyed stream"
+        setCaptureStream(null);
         setIsCapturing(false);
+        console.log("[AudioStreamCapture] cleanupAudio — stream disposed & nulled");
     }, []);
+
+    const stopCapture = useCallback(() => {
+        cleanupAudio();
+    }, [cleanupAudio]);
 
     // Directive 012: Auto-resume when user interacts
     useEffect(() => {
@@ -138,5 +163,7 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
         needsInteraction,
         startCapture,
         stopCapture,
+        /** Atomic 01.1: Explicit disposal for pause/unmount */
+        cleanupAudio,
     };
 }

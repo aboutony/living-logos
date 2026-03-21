@@ -197,6 +197,12 @@ export default function SubtitleOverlay({
     // ─── Start MediaRecorder (ONLY path — real audio or nothing) ───
     const startRecorderProcessing = useCallback(() => {
         if (!mediaStream || processingRef.current) return;
+        // Atomic 01.1: Verify stream is alive before creating MediaRecorder
+        const tracks = mediaStream.getTracks();
+        if (tracks.length === 0 || tracks.every(t => t.readyState === 'ended')) {
+            console.warn("[SubtitleOverlay] Stream ended/destroyed — skipping recorder start");
+            return;
+        }
         try {
             const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
                 ? "audio/webm;codecs=opus" : "audio/webm";
@@ -206,7 +212,15 @@ export default function SubtitleOverlay({
             };
             // Restart recording after each stop to produce complete valid files
             recorder.onstop = () => {
+                // Atomic 01.1: Verify stream is still alive before restarting
                 if (processingRef.current && recorderRef.current) {
+                    const currentTracks = mediaStream.getTracks();
+                    if (currentTracks.length === 0 || currentTracks.every(t => t.readyState === 'ended')) {
+                        console.warn("[SubtitleOverlay] Stream ended during recording cycle — stopping");
+                        processingRef.current = false;
+                        setIsProcessing(false);
+                        return;
+                    }
                     try { recorderRef.current.start(); } catch { }
                 }
             };
@@ -215,9 +229,18 @@ export default function SubtitleOverlay({
             processingRef.current = true;
             setIsProcessing(true);
             setStatusText("📡 Live — Whisper STT processing audio");
-            // Stop every 4s → ondataavailable with complete WebM → onstop → restart
+            // Stop every 3s → ondataavailable with complete WebM → onstop → restart
             periodicTimerRef.current = setInterval(() => {
                 if (recorderRef.current && recorderRef.current.state === "recording") {
+                    // Atomic 01.1: Check stream validity before stopping
+                    const liveTracks = mediaStream.getTracks();
+                    if (liveTracks.length === 0 || liveTracks.every(t => t.readyState === 'ended')) {
+                        clearInterval(periodicTimerRef.current);
+                        periodicTimerRef.current = null;
+                        processingRef.current = false;
+                        setIsProcessing(false);
+                        return;
+                    }
                     recorderRef.current.stop();
                 }
             }, 3000);
