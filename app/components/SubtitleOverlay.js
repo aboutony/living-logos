@@ -89,8 +89,7 @@ export default function SubtitleOverlay({
     const targetLangRef = useRef(targetLang);
     const cueTimerRef = useRef(null);
     const lastCueIdRef = useRef(null);
-    const tabStreamRef = useRef(null);
-    const [hasTabStream, setHasTabStream] = useState(false);
+    // Atomic 04: tabStreamRef/hasTabStream REMOVED — getDisplayMedia purged
 
     useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
     useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
@@ -347,72 +346,11 @@ export default function SubtitleOverlay({
         }
     }, []);
 
-    // ─── YouTube Tab Audio Capture (cross-origin workaround) ───
-    const startTabRecorderProcessing = useCallback(() => {
-        if (!tabStreamRef.current || processingRef.current) return;
-        try {
-            const audioTracks = tabStreamRef.current.getAudioTracks();
-            if (audioTracks.length === 0) {
-                setStatusText("⚠ No audio track — ensure 'Share audio' is checked");
-                return;
-            }
-            const audioStream = new MediaStream(audioTracks);
-            const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-                ? "audio/webm;codecs=opus" : "audio/webm";
-            const recorder = new MediaRecorder(audioStream, { mimeType, audioBitsPerSecond: 16000 });
-            recorder.ondataavailable = (event) => {
-                if (event.data && event.data.size > 0) transcribeAndTranslate(event.data);
-            };
-            recorder.onstop = () => {
-                if (processingRef.current && recorderRef.current) {
-                    try { recorderRef.current.start(); } catch { }
-                }
-            };
-            recorder.start(); // No timeslice — complete valid files each cycle
-            recorderRef.current = recorder;
-            processingRef.current = true;
-            setIsProcessing(true);
-            setStatusText("📡 Live — Whisper STT processing YouTube audio");
-            periodicTimerRef.current = setInterval(() => {
-                if (recorderRef.current && recorderRef.current.state === "recording") {
-                    recorderRef.current.stop();
-                }
-            }, 3000);
-        } catch (err) {
-            console.error("[SubtitleOverlay] Tab recorder error:", err);
-            setStatusText("⚠ Failed to process tab audio");
-        }
-    }, [transcribeAndTranslate]);
+    // Atomic 04: startTabRecorderProcessing & handleYouTubeCapture DELETED
+    // All capture now uses internal AudioNode tap via useAudioStreamCapture
 
-    const handleYouTubeCapture = useCallback(async () => {
-        try {
-            setStatusText("📡 Requesting tab audio access…");
-            const stream = await navigator.mediaDevices.getDisplayMedia({
-                video: true,
-                audio: true,
-                preferCurrentTab: true,
-            });
-            tabStreamRef.current = stream;
-            setHasTabStream(true);
-            // Listen for track end (user revokes sharing)
-            stream.getAudioTracks().forEach(track => {
-                track.onended = () => {
-                    tabStreamRef.current = null;
-                    setHasTabStream(false);
-                    stopProcessing();
-                    setStatusText("🔊 Tab sharing ended — tap to re-enable");
-                };
-            });
-            setTimeout(() => startTabRecorderProcessing(), 300);
-        } catch (err) {
-            console.error("[SubtitleOverlay] Tab capture denied:", err);
-            setStatusText("⚠ Permission denied — tap to retry");
-        }
-    }, [startTabRecorderProcessing, stopProcessing]);
-
-    // ─── Directive 018: Hardware-lock to video play state ───
-    // When paused: stop recorder, clear display instantly
-    // When playing: restart recorder from current audio point
+    // ─── Directive 018 + Atomic 04: Hardware-lock to video play state ───
+    // Unified path — both YouTube and non-YouTube use internal AudioNode tap
     useEffect(() => {
         if (!enabled) return;
 
@@ -425,18 +363,8 @@ export default function SubtitleOverlay({
             return;
         }
 
-        // VIDEO PLAYING → attempt to start recorder
+        // VIDEO PLAYING → attempt to start recorder via internal tap
         if (!hasInteracted) return;
-
-        if (isYouTubeMode) {
-            // YouTube cross-origin: use tab audio capture via getDisplayMedia
-            if (tabStreamRef.current) {
-                const timer = setTimeout(() => startTabRecorderProcessing(), 300);
-                return () => clearTimeout(timer);
-            }
-            setStatusText("🔊 Tap below to enable live YouTube subtitles");
-            return;
-        }
 
         if (mediaStream) {
             const timer = setTimeout(() => startRecorderProcessing(), 300);
@@ -445,7 +373,7 @@ export default function SubtitleOverlay({
             onStartCapture?.();
             setStatusText("📡 Connecting to internal audio buffer…");
         }
-    }, [enabled, isPlaying, hasInteracted, mediaStream, isYouTubeMode, startRecorderProcessing, startTabRecorderProcessing, onStartCapture, stopProcessing]);
+    }, [enabled, isPlaying, hasInteracted, mediaStream, startRecorderProcessing, onStartCapture, stopProcessing]);
 
     // ─── Stop when disabled ───
     useEffect(() => { if (!enabled) stopProcessing(); }, [enabled, stopProcessing]);
@@ -461,10 +389,7 @@ export default function SubtitleOverlay({
             clearTimeout(cueTimerRef.current);
             clearTimeout(silenceFadeTimerRef.current); // Atomic 03
             if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
-            if (tabStreamRef.current) {
-                tabStreamRef.current.getTracks().forEach(t => t.stop());
-                tabStreamRef.current = null;
-            }
+            // Atomic 04: tabStreamRef cleanup REMOVED — no more getDisplayMedia
         };
     }, []);
 
@@ -556,11 +481,7 @@ export default function SubtitleOverlay({
                     ) : (
                         <div className="subtitle-status">
                             {statusText}
-                            {isYouTubeMode && !hasTabStream && !isProcessing && (
-                                <button className="yt-capture-btn" onClick={handleYouTubeCapture}>
-                                    🔊 Enable Live Subtitles
-                                </button>
-                            )}
+                            {/* Atomic 04: YouTube capture button REMOVED — internal tap only */}
                         </div>
                     )}
                 </div>
