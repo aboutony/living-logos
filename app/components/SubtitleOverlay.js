@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Directives 011, 012, 013, 016 & 018 + Atomic 04.7
+ * SubtitleOverlay — Directives 011, 012, 013, 016 & 018 + Atomic 04.8
  *
  * 011: Internal digital audio stream processing, no microphone
  * 012: Zero-click activation on first user interaction
@@ -12,8 +12,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
  * 018: Hardware-locked — 0% functional without live audio feed.
  *      Tied to HTMLMediaElement.currentTime. Pause → idle + clear.
  *
- * Atomic 04.7: SSE Injection — All audio extraction is server-side via ffmpeg.
- *              Client opens EventSource → receives translated subtitles.
+ * Atomic 04.8: Synchronous SSE Activation — No useEffect for initial connection.
+ *              SovereignPlayer.handleStart() calls connectRef.current.connect()
+ *              synchronously on the physical click event.
  *              ZERO AudioContext. ZERO ScriptProcessor. ZERO MediaRecorder.
  *
  * RTL Languages: Arabic (ar), Persian (fa), Hebrew (he), Urdu (ur)
@@ -73,6 +74,7 @@ export default function SubtitleOverlay({
     isYouTubeMode,
     hasInteracted,
     isPlaying = false, // Directive 018: hardware-lock to video state
+    connectRef,        // Atomic 04.8: Ref for synchronous SSE activation from parent
 }) {
     const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
@@ -84,46 +86,49 @@ export default function SubtitleOverlay({
     const [statusText, setStatusText] = useState("📡 Waiting for first interaction…");
     const [sceneDesc, setSceneDesc] = useState("");
 
+    const eventSourceRef = useRef(null);
+    const sourceLangRef = useRef(sourceLang);
+    const targetLangRef = useRef(targetLang);
+
+    // Keep refs in sync with state for synchronous access from connectRelay
+    useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
+    useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
+
     // Directive 013: RTL detection
     const isTargetRTL = RTL_CODES.has(targetLang);
     const isSourceRTL = RTL_CODES.has(sourceLang);
 
-    // ─── Atomic 04.7: SSE Stability Guard ───
-    // Single useEffect — opens EventSource when enabled + playing + streamUrl.
-    // Returns eventSource.close() to prevent vicious circle of multiple connections.
-    useEffect(() => {
-        // Gate: all three conditions must be true
-        if (!enabled || !isPlaying || !streamUrl) {
-            setIsProcessing(false);
-            if (!isPlaying && enabled) {
-                setCueQueue([]);
-                setSceneDesc("");
-                setStatusText("⏸ Paused — Subtitle engine idle");
-            }
-            return;
+    // ─── Atomic 04.8: Synchronous SSE Connect ───
+    // Called directly from SovereignPlayer.handleStart() — NOT from useEffect.
+    // This eliminates the "Waiting..." hang caused by async useEffect timing.
+    const connectRelay = useCallback(() => {
+        if (!streamUrl) return;
+
+        // Close any existing connection first
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+        }
+        if (window.livingLogosSSE) {
+            window.livingLogosSSE.close();
         }
 
-        // Build SSE URL
+        // Build SSE URL with current language refs
         const params = new URLSearchParams({
             streamUrl,
-            sourceLang,
-            targetLang,
+            sourceLang: sourceLangRef.current,
+            targetLang: targetLangRef.current,
             streamId: streamId || "",
         });
         const sseUrl = `/api/ai/transcribe/stream?${params.toString()}`;
+        console.log("[SubtitleOverlay] 04.8 — Synchronous SSE connect:", sseUrl);
 
-        console.log("[SubtitleOverlay] 04.7 — Opening SSE connection:", sseUrl);
-        setStatusText("📡 Connecting to Sovereign Relay…");
+        // Step 2: Create EventSource on window scope (synchronous)
+        const es = new EventSource(sseUrl);
+        eventSourceRef.current = es;
+        window.livingLogosSSE = es;
 
-        const eventSource = new EventSource(sseUrl);
-
-        eventSource.onopen = () => {
-            console.log("[SubtitleOverlay] SSE connected");
-            setIsProcessing(true);
-            setStatusText("📡 Connected to Sovereign Relay");
-        };
-
-        eventSource.onmessage = (event) => {
+        // Step 3: Immediately attach .onmessage listener
+        es.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
 
@@ -161,7 +166,6 @@ export default function SubtitleOverlay({
                     }
 
                     case "vad":
-                        // Server detected silence — no action needed, keep last cue visible
                         break;
 
                     case "error":
@@ -177,26 +181,76 @@ export default function SubtitleOverlay({
             }
         };
 
-        eventSource.onerror = () => {
+        es.onerror = () => {
             console.warn("[SubtitleOverlay] SSE connection error / closed");
             setIsProcessing(false);
             setStatusText("📡 Reconnecting to Sovereign Relay…");
         };
 
-        // ─── Stability Guard: Clean close on unmount / re-render ───
-        return () => {
-            console.log("[SubtitleOverlay] 04.7 — Closing SSE connection");
-            eventSource.close();
-            setIsProcessing(false);
-        };
-    }, [enabled, isPlaying, streamUrl, sourceLang, targetLang, streamId]);
+        // The "Live" switch — only AFTER EventSource is opened
+        setIsProcessing(true);
+        setStatusText("📡 Connected to Sovereign Relay");
+    }, [streamUrl, streamId]);
 
-    // ─── Stop when disabled ───
+    // ─── Atomic 04.8: Disconnect relay ───
+    const disconnectRelay = useCallback(() => {
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+        }
+        if (window.livingLogosSSE) {
+            window.livingLogosSSE.close();
+            window.livingLogosSSE = null;
+        }
+        setIsProcessing(false);
+    }, []);
+
+    // ─── Atomic 04.8: Register connect/disconnect on parent ref ───
+    // This runs on mount so SovereignPlayer.handleStart() can call it synchronously.
+    useEffect(() => {
+        if (connectRef) {
+            connectRef.current = { connect: connectRelay, disconnect: disconnectRelay };
+        }
+    }, [connectRef, connectRelay, disconnectRelay]);
+
+    // ─── Disconnect on pause or disable ───
+    useEffect(() => {
+        if (!isPlaying) {
+            disconnectRelay();
+            if (enabled) {
+                setCueQueue([]);
+                setSceneDesc("");
+                setStatusText("⏸ Paused — Subtitle engine idle");
+            }
+        }
+    }, [isPlaying, enabled, disconnectRelay]);
+
     useEffect(() => {
         if (!enabled) {
-            setIsProcessing(false);
+            disconnectRelay();
         }
-    }, [enabled]);
+    }, [enabled, disconnectRelay]);
+
+    // ─── Reconnect on language change if currently connected ───
+    useEffect(() => {
+        if (isProcessing && eventSourceRef.current && streamUrl) {
+            connectRelay();
+        }
+    }, [sourceLang, targetLang]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ─── Cleanup on unmount ───
+    useEffect(() => {
+        return () => {
+            if (eventSourceRef.current) {
+                eventSourceRef.current.close();
+                eventSourceRef.current = null;
+            }
+            if (window.livingLogosSSE) {
+                window.livingLogosSSE.close();
+                window.livingLogosSSE = null;
+            }
+        };
+    }, []);
 
     if (!enabled) return null;
 

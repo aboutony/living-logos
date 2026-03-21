@@ -154,6 +154,8 @@ export default function SovereignPlayer({
   // Directive 017: Key used to force-remount SubtitleOverlay on video change
   const [subtitleKey, setSubtitleKey] = useState(0);
   const hideTimer = useRef(null);
+  // Atomic 04.8: Ref for synchronous SSE activation from SubtitleOverlay
+  const relayRef = useRef(null);
 
   // ─── Directive 012: Global Interaction Listener ───
   const { hasInteracted } = useUserInteraction();
@@ -191,8 +193,10 @@ export default function SovereignPlayer({
     setSubtitleKey((k) => k + 1);
   }, [src]);
 
-  // ─── Atomic 04.6: Unified Power-On — handleStart() ───
-  // Audio extraction is server-side. Client just plays video + enables subtitles.
+  // ─── Atomic 04.8: Synchronous Power-On — handleStart() ───
+  // Step 1: video.play()
+  // Step 2: window.livingLogosSSE = new EventSource(...) via relayRef
+  // Step 3: .onmessage attached immediately — no useEffect delay
   function handleStart() {
     const video = videoRef.current;
     if (!video) return;
@@ -201,7 +205,9 @@ export default function SovereignPlayer({
     if (!subtitlesEnabled) {
       setSubtitlesEnabled(true);
     }
-    console.log("[SovereignPlayer] 04.6 — Unified handleStart() fired (server relay)");
+    // Atomic 04.8: Synchronous SSE activation on the physical click
+    relayRef.current?.connect?.();
+    console.log("[SovereignPlayer] 04.8 — Synchronous handleStart() + SSE");
   }
 
   function handlePause() {
@@ -351,7 +357,7 @@ export default function SovereignPlayer({
 
       {children}
 
-      {/* Patristic AI Subtitle Overlay — Atomic 04.7: SSE Server Relay */}
+      {/* Patristic AI Subtitle Overlay — Atomic 04.8: Synchronous SSE */}
       {!youtubeChannel && (
         <SubtitleOverlay
           key={`sub-${subtitleKey}`}
@@ -365,6 +371,7 @@ export default function SovereignPlayer({
           isYouTubeMode={false}
           hasInteracted={hasInteracted}
           isPlaying={isPlaying}
+          connectRef={relayRef}
         />
       )}
 
