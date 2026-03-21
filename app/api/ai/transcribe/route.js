@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sanitizeTheologicalOutput, detectSacredTerms, SUPPORTED_LANGUAGES } from "@/lib/patristic-ai";
 
 /**
  * POST /api/ai/transcribe
@@ -114,7 +115,7 @@ async function whisperTranscribe(base64Audio, format = "webm", sourceLang = "el"
 export async function POST(request) {
     try {
         const body = await request.json();
-        const { audioData, format, sourceLang, streamId } = body;
+        const { audioData, format, sourceLang, targetLang, streamId } = body;
 
         if (!audioData) {
             return NextResponse.json(
@@ -141,9 +142,29 @@ export async function POST(request) {
             );
         }
 
+        // ─── Atomic 02: Post-Processing Relay — Any-to-Any Translation ───
+        let translatedText = null;
+        let sacredTermsDetected = [];
+        let glossaryApplied = [];
+
+        const effectiveTargetLang = targetLang || null;
+        if (effectiveTargetLang && effectiveTargetLang !== sourceLang) {
+            const translated = await translateWithGPT(result.transcript, sourceLang, effectiveTargetLang);
+            if (translated) {
+                translatedText = translated.text;
+                sacredTermsDetected = translated.sacredTerms;
+                glossaryApplied = translated.glossaryApplied;
+            }
+        } else if (effectiveTargetLang && effectiveTargetLang === sourceLang) {
+            // Same language — no translation needed, pass through
+            translatedText = result.transcript;
+        }
+
         return NextResponse.json({
             success: true,
             transcript: result.transcript,
+            // Atomic 02: Unified relay response
+            translatedText,
             cue: {
                 id: Date.now(),
                 startTime: 0,
@@ -151,9 +172,12 @@ export async function POST(request) {
                 duration: result.duration || 3,
                 scene: null,
             },
-            confidence: 0.97,
+            confidence: sacredTermsDetected.length > 0 ? 0.85 : 0.97,
+            sacredTerms: sacredTermsDetected,
+            glossaryApplied,
             sequenceId: Date.now(),
             engine: "OpenAI Whisper-1",
+            translationEngine: translatedText ? "GPT-4o-mini + Sacred Glossary" : null,
             source: "internal-audio-buffer",
             micRequired: false,
             format: format || "webm",
@@ -165,6 +189,83 @@ export async function POST(request) {
             { success: false, error: "Transcription failed: " + err.message },
             { status: 500 }
         );
+    }
+}
+
+/**
+ * Atomic 02: GPT-4o-mini Translation Relay with Sacred Glossary enforcement.
+ * Mirrors /api/ai/translate logic but runs inline as post-processing.
+ */
+async function translateWithGPT(text, sourceLang, targetLang) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey || !text || text.length < 2) return null;
+
+    try {
+        const targetLangName = SUPPORTED_LANGUAGES.find(l => l.code === targetLang)?.name || targetLang;
+        const sourceLangName = SUPPORTED_LANGUAGES.find(l => l.code === sourceLang)?.name || sourceLang;
+
+        const systemPrompt = [
+            `You are a Greek Orthodox theological translator. Translate from ${sourceLangName} to ${targetLangName}.`,
+            "",
+            "RULES:",
+            "1. Translate MEANING and CONTEXT, not word-by-word.",
+            "2. You are an expert in Orthodox Christianity — Patristics, liturgy, hagiography, and dogma.",
+            "3. Saint names MUST use their correct international transliterations.",
+            "4. Preserve the register and gravitas of ecclesiastical speech.",
+            "5. Output ONLY the translation, no commentary, no brackets, no metadata.",
+            "6. If you cannot translate a phrase, transliterate it.",
+        ].join("\n");
+
+        const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: "gpt-4o-mini",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: text },
+                ],
+                max_tokens: 300,
+                temperature: 0.3,
+            }),
+            signal: AbortSignal.timeout(8000),
+        });
+
+        if (!gptRes.ok) return null;
+
+        const gptData = await gptRes.json();
+        let translatedText = gptData.choices?.[0]?.message?.content?.trim();
+        if (!translatedText || translatedText.length < 2) return null;
+
+        // Theological Interception: Sacred Glossary enforcement
+        const sacredTerms = detectSacredTerms(text);
+        const glossaryApplied = [];
+
+        for (const term of sacredTerms) {
+            const sourceForm = term.translations[sourceLang] || term.canonical;
+            const targetForm = term.translations[targetLang] || term.canonical;
+            if (targetForm && translatedText.includes(sourceForm)) {
+                translatedText = translatedText.replace(
+                    new RegExp(sourceForm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+                    `⸬${targetForm}⸬`
+                );
+                glossaryApplied.push({ termId: term.id, from: sourceForm, to: targetForm });
+            }
+        }
+
+        // Theological Interception: Sanitize for canonical Christian forms
+        translatedText = sanitizeTheologicalOutput(translatedText);
+
+        return {
+            text: translatedText,
+            sacredTerms: sacredTerms.map(t => ({ id: t.id, canonical: t.canonical, category: t.category })),
+            glossaryApplied,
+        };
+    } catch {
+        return null;
     }
 }
 

@@ -161,6 +161,7 @@ export default function SubtitleOverlay({
     }, [translateSpeech]);
 
     // ─── Directive 018: Transcribe ONLY with real audio data ───
+    // ─── Atomic 02: Any-to-Any relay — sends targetLang for single round-trip ───
     const transcribeAndTranslate = useCallback(async (audioBlob) => {
         // D018: Hard requirement — no audio blob = no transcription
         if (!audioBlob || audioBlob.size === 0) return;
@@ -179,12 +180,36 @@ export default function SubtitleOverlay({
                     audioData,
                     format: "webm",
                     sourceLang: sourceLangRef.current,
+                    targetLang: targetLangRef.current,
                     streamId,
                 }),
             });
             const data = await res.json();
             if (data.success && data.transcript) {
-                processTranscriptionCue(data.transcript, data.cue || null);
+                // Atomic 02: If the relay returned a pre-translated text, use it directly
+                if (data.translatedText) {
+                    const cueId = data.cue?.id || `cue-${Date.now()}`;
+                    if (data.cue?.scene) setSceneDesc(data.cue.scene);
+                    if (data.sacredTerms?.length > 0) {
+                        setSacredTermCount(data.sacredTerms.length);
+                        setVetted(true);
+                    }
+                    const newCue = {
+                        id: cueId,
+                        text: data.transcript,
+                        translated: data.translatedText,
+                        timestamp: Date.now(),
+                    };
+                    setCueQueue(prev => [...prev.slice(-2), newCue]);
+                    setStatusText("📡 Live — Any-to-Any relay active");
+                    // Auto-expire this cue after 10 seconds
+                    setTimeout(() => {
+                        setCueQueue(prev => prev.filter(c => c.id !== cueId));
+                    }, 10000);
+                } else {
+                    // Fallback: no translation from relay, use separate translate path
+                    processTranscriptionCue(data.transcript, data.cue || null);
+                }
             } else if (!data.success && data.error) {
                 console.error("[SubtitleOverlay] Whisper error:", data.error);
                 setStatusText("\u26a0 " + data.error);
