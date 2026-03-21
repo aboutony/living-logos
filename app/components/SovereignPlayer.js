@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import SubtitleOverlay from "./SubtitleOverlay";
+import useAudioStreamCapture from "../hooks/useAudioStreamCapture";
 import useUserInteraction from "../hooks/useUserInteraction";
 
 /**
@@ -154,11 +155,19 @@ export default function SovereignPlayer({
   // Directive 017: Key used to force-remount SubtitleOverlay on video change
   const [subtitleKey, setSubtitleKey] = useState(0);
   const hideTimer = useRef(null);
-  // Atomic 04.8: Ref for synchronous SSE activation from SubtitleOverlay
-  const relayRef = useRef(null);
 
   // ─── Directive 012: Global Interaction Listener ───
   const { hasInteracted } = useUserInteraction();
+
+  // ─── Atomic 06: Same-Origin Audio Capture ───
+  const {
+    isCapturing,
+    error: captureError,
+    startCapture,
+    stopCapture,
+    flushAudioBuffer,
+    cleanupAudio,
+  } = useAudioStreamCapture();
 
   // ─── Directive 012: Auto-enable subtitles once user interacts ───
   useEffect(() => {
@@ -167,24 +176,28 @@ export default function SovereignPlayer({
     }
   }, [hasInteracted, autoSubtitles]);
 
-  // Setup HLS
+  // ─── Atomic 06: Proxy URL — route all streams through Same-Origin proxy ───
+  const proxyUrl = src ? `/api/proxy?url=${encodeURIComponent(src)}` : null;
+
+  // Setup HLS — all URLs go through /api/proxy for Same-Origin
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !src) return;
+    if (!video || !proxyUrl) return;
     if (src.endsWith(".m3u8")) {
       import("hls.js").then(({ default: Hls }) => {
         if (Hls.isSupported()) {
           const hls = new Hls();
-          hls.loadSource(src);
+          hls.loadSource(proxyUrl);
           hls.attachMedia(video);
         } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = src;
+          video.src = proxyUrl;
         }
       });
     } else {
-      video.src = src;
+      video.src = proxyUrl;
     }
-  }, [src]);
+    return () => { cleanupAudio(); };
+  }, [src, proxyUrl, cleanupAudio]);
 
   // ─── Directive 017: Multi-Video Purge ───
   // Clear subtitles whenever the video source changes
@@ -193,10 +206,10 @@ export default function SovereignPlayer({
     setSubtitleKey((k) => k + 1);
   }, [src]);
 
-  // ─── Atomic 04.8: Synchronous Power-On — handleStart() ───
+  // ─── Atomic 06: Sovereign Power-On — handleStart() ───
   // Step 1: video.play()
-  // Step 2: window.livingLogosSSE = new EventSource(...) via relayRef
-  // Step 3: .onmessage attached immediately — no useEffect delay
+  // Step 2: startCapture(video) — ScriptProcessor tap (same-origin unlocked)
+  // Step 3: Enable subtitles — PCM polling begins
   function handleStart() {
     const video = videoRef.current;
     if (!video) return;
@@ -205,9 +218,9 @@ export default function SovereignPlayer({
     if (!subtitlesEnabled) {
       setSubtitlesEnabled(true);
     }
-    // Atomic 04.8: Synchronous SSE activation on the physical click
-    relayRef.current?.connect?.();
-    console.log("[SovereignPlayer] 04.8 — Synchronous handleStart() + SSE");
+    // Atomic 06: Synchronous audio tap — same-origin proxy unlocks this
+    startCapture(video);
+    console.log("[SovereignPlayer] 06 — Sovereign handleStart() + audio tap");
   }
 
   function handlePause() {
@@ -357,7 +370,7 @@ export default function SovereignPlayer({
 
       {children}
 
-      {/* Patristic AI Subtitle Overlay — Atomic 04.8: Synchronous SSE */}
+      {/* Patristic AI Subtitle Overlay — Atomic 06: Sovereign Same-Origin Tap */}
       {!youtubeChannel && (
         <SubtitleOverlay
           key={`sub-${subtitleKey}`}
@@ -366,12 +379,13 @@ export default function SovereignPlayer({
           onClose={() => setSubtitlesEnabled(false)}
           autoEnable={autoSubtitles}
           streamTier={streamTier}
-          streamUrl={src}
-          captureError={null}
+          flushAudioBuffer={flushAudioBuffer}
+          isCapturing={isCapturing}
+          captureError={captureError}
+          onStartCapture={() => startCapture(videoRef.current)}
           isYouTubeMode={false}
           hasInteracted={hasInteracted}
           isPlaying={isPlaying}
-          connectRef={relayRef}
         />
       )}
 

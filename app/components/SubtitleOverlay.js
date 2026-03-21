@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Directives 011, 012, 013, 016 & 018 + Atomic 04.8
+ * SubtitleOverlay — Directives 011, 012, 013, 016 & 018 + Atomic 06
  *
  * 011: Internal digital audio stream processing, no microphone
  * 012: Zero-click activation on first user interaction
@@ -12,10 +12,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
  * 018: Hardware-locked — 0% functional without live audio feed.
  *      Tied to HTMLMediaElement.currentTime. Pause → idle + clear.
  *
- * Atomic 04.8: Synchronous SSE Activation — No useEffect for initial connection.
- *              SovereignPlayer.handleStart() calls connectRef.current.connect()
- *              synchronously on the physical click event.
- *              ZERO AudioContext. ZERO ScriptProcessor. ZERO MediaRecorder.
+ * Atomic 06: Same-Origin Sovereign Proxy — ScriptProcessorNode tap re-enabled.
+ *            flushAudioBuffer() provides PCM Float32 samples every 3s.
+ *            PCM → WAV → base64 → POST /api/ai/transcribe → translated subtitle.
  *
  * RTL Languages: Arabic (ar), Persian (fa), Hebrew (he), Urdu (ur)
  * Automatically applies `direction: rtl` and `text-align: right` for these.
@@ -69,12 +68,13 @@ export default function SubtitleOverlay({
     onClose,
     autoEnable,
     streamTier,
-    streamUrl,        // Atomic 04.7: The media URL for server-side ffmpeg extraction
+    flushAudioBuffer,  // Atomic 06: PCM buffer flush from ScriptProcessor
+    isCapturing,       // Atomic 06: Whether ScriptProcessor is active
     captureError,
+    onStartCapture,
     isYouTubeMode,
     hasInteracted,
     isPlaying = false, // Directive 018: hardware-lock to video state
-    connectRef,        // Atomic 04.8: Ref for synchronous SSE activation from parent
 }) {
     const [sourceLang, setSourceLang] = useState("el");
     const [targetLang, setTargetLang] = useState("en");
@@ -84,13 +84,17 @@ export default function SubtitleOverlay({
     const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
     const [statusText, setStatusText] = useState("📡 Waiting for first interaction…");
-    const [sceneDesc, setSceneDesc] = useState("");
 
-    const eventSourceRef = useRef(null);
+    const processingRef = useRef(false);
+    const periodicTimerRef = useRef(null);
     const sourceLangRef = useRef(sourceLang);
     const targetLangRef = useRef(targetLang);
 
-    // Keep refs in sync with state for synchronous access from connectRelay
+    // VAD
+    const VAD_SILENCE_THRESHOLD = 0.01;
+    const silenceStreakRef = useRef(0);
+    const silenceFadeTimerRef = useRef(null);
+
     useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
     useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
 
@@ -98,157 +102,177 @@ export default function SubtitleOverlay({
     const isTargetRTL = RTL_CODES.has(targetLang);
     const isSourceRTL = RTL_CODES.has(sourceLang);
 
-    // ─── Atomic 04.8: Synchronous SSE Connect ───
-    // Called directly from SovereignPlayer.handleStart() — NOT from useEffect.
-    // This eliminates the "Waiting..." hang caused by async useEffect timing.
-    const connectRelay = useCallback(() => {
-        if (!streamUrl) return;
+    // ─── Atomic 06: Encode Float32 PCM → WAV → base64 ───
+    const pcmToWavBase64 = useCallback((samples, sampleRate) => {
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+        const blockAlign = numChannels * (bitsPerSample / 8);
+        const dataSize = samples.length * (bitsPerSample / 8);
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
 
-        // Close any existing connection first
-        if (eventSourceRef.current) {
-            eventSourceRef.current.close();
+        const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitsPerSample, true);
+        writeStr(36, 'data');
+        view.setUint32(40, dataSize, true);
+
+        let offset = 44;
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            offset += 2;
         }
-        if (window.livingLogosSSE) {
-            window.livingLogosSSE.close();
-        }
 
-        // Build SSE URL with current language refs
-        const params = new URLSearchParams({
-            streamUrl,
-            sourceLang: sourceLangRef.current,
-            targetLang: targetLangRef.current,
-            streamId: streamId || "",
-        });
-        const sseUrl = `/api/ai/transcribe/stream?${params.toString()}`;
-        console.log("[SubtitleOverlay] 04.8 — Synchronous SSE connect:", sseUrl);
-
-        // Step 2: Create EventSource on window scope (synchronous)
-        const es = new EventSource(sseUrl);
-        eventSourceRef.current = es;
-        window.livingLogosSSE = es;
-
-        // Step 3: Immediately attach .onmessage listener
-        es.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-
-                switch (data.type) {
-                    case "status":
-                        setStatusText(data.message || "📡 Relay active");
-                        setIsProcessing(true);
-                        break;
-
-                    case "transcription": {
-                        if (!data.success || !data.translatedText) break;
-
-                        const cueId = data.cue?.id || Date.now();
-                        const newCue = {
-                            id: cueId,
-                            text: data.transcript,
-                            translated: data.translatedText,
-                            timestamp: Date.now(),
-                        };
-
-                        setCueQueue(prev => [...prev.slice(-2), newCue]);
-                        setStatusText("📡 Connected to Sovereign Relay");
-
-                        // Sacred term tracking
-                        if (data.sacredTerms?.length > 0) {
-                            setSacredTermCount(data.sacredTerms.length);
-                            setVetted(true);
-                        }
-
-                        // Auto-expire cue after 10 seconds
-                        setTimeout(() => {
-                            setCueQueue(prev => prev.filter(c => c.id !== cueId));
-                        }, 10000);
-                        break;
-                    }
-
-                    case "vad":
-                        break;
-
-                    case "error":
-                        console.error("[SubtitleOverlay] SSE error:", data.message);
-                        setStatusText("⚠ " + (data.message || "Relay error"));
-                        break;
-
-                    default:
-                        break;
-                }
-            } catch (err) {
-                console.error("[SubtitleOverlay] Failed to parse SSE data:", err);
-            }
-        };
-
-        es.onerror = () => {
-            console.warn("[SubtitleOverlay] SSE connection error / closed");
-            setIsProcessing(false);
-            setStatusText("📡 Reconnecting to Sovereign Relay…");
-        };
-
-        // The "Live" switch — only AFTER EventSource is opened
-        setIsProcessing(true);
-        setStatusText("📡 Connected to Sovereign Relay");
-    }, [streamUrl, streamId]);
-
-    // ─── Atomic 04.8: Disconnect relay ───
-    const disconnectRelay = useCallback(() => {
-        if (eventSourceRef.current) {
-            eventSourceRef.current.close();
-            eventSourceRef.current = null;
-        }
-        if (window.livingLogosSSE) {
-            window.livingLogosSSE.close();
-            window.livingLogosSSE = null;
-        }
-        setIsProcessing(false);
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
     }, []);
 
-    // ─── Atomic 04.8: Register connect/disconnect on parent ref ───
-    // This runs on mount so SovereignPlayer.handleStart() can call it synchronously.
-    useEffect(() => {
-        if (connectRef) {
-            connectRef.current = { connect: connectRelay, disconnect: disconnectRelay };
-        }
-    }, [connectRef, connectRelay, disconnectRelay]);
+    // ─── VAD: Compute RMS on Float32 PCM ───
+    const computeRMS = useCallback((samples) => {
+        if (!samples || samples.length === 0) return 0;
+        let sum = 0;
+        for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+        return Math.sqrt(sum / samples.length);
+    }, []);
 
-    // ─── Disconnect on pause or disable ───
-    useEffect(() => {
-        if (!isPlaying) {
-            disconnectRelay();
-            if (enabled) {
-                setCueQueue([]);
-                setSceneDesc("");
-                setStatusText("⏸ Paused — Subtitle engine idle");
+    // ─── Atomic 06: Transcribe + Translate PCM chunk ───
+    const transcribePCM = useCallback(async (pcmData) => {
+        if (!pcmData || !pcmData.samples || pcmData.samples.length === 0) return;
+
+        // VAD gate
+        const rms = computeRMS(pcmData.samples);
+        if (rms < VAD_SILENCE_THRESHOLD) {
+            silenceStreakRef.current++;
+            if (silenceStreakRef.current === 1) {
+                if (silenceFadeTimerRef.current) clearTimeout(silenceFadeTimerRef.current);
+                silenceFadeTimerRef.current = setTimeout(() => {
+                    setCueQueue([]);
+                    setStatusText("📡 SOVEREIGN — Listening… (silence detected)");
+                    silenceFadeTimerRef.current = null;
+                }, 5000);
             }
+            return;
         }
-    }, [isPlaying, enabled, disconnectRelay]);
 
+        // Speech detected
+        silenceStreakRef.current = 0;
+        if (silenceFadeTimerRef.current) {
+            clearTimeout(silenceFadeTimerRef.current);
+            silenceFadeTimerRef.current = null;
+        }
+
+        try {
+            const audioData = pcmToWavBase64(pcmData.samples, pcmData.sampleRate);
+
+            const res = await fetch("/api/ai/transcribe", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    audioData,
+                    format: "wav",
+                    sourceLang: sourceLangRef.current,
+                    targetLang: targetLangRef.current,
+                    streamId,
+                }),
+            });
+            const data = await res.json();
+            if (data.success && data.transcript) {
+                const cueId = data.cue?.id || Date.now();
+                const newCue = {
+                    id: cueId,
+                    text: data.transcript,
+                    translated: data.translatedText || data.transcript,
+                    timestamp: Date.now(),
+                };
+                setCueQueue(prev => [...prev.slice(-2), newCue]);
+                setStatusText("📡 SOVEREIGN — Live transcription active");
+
+                if (data.sacredTerms?.length > 0) {
+                    setSacredTermCount(data.sacredTerms.length);
+                    setVetted(true);
+                }
+
+                // Auto-expire after 10s
+                setTimeout(() => {
+                    setCueQueue(prev => prev.filter(c => c.id !== cueId));
+                }, 10000);
+            }
+        } catch (err) {
+            console.error("[SubtitleOverlay] Transcription failed:", err);
+        }
+    }, [streamId, pcmToWavBase64, computeRMS]);
+
+    // ─── Atomic 06: Start PCM Polling (3s interval) ───
+    const startPolling = useCallback(() => {
+        if (processingRef.current) return;
+        processingRef.current = true;
+        setIsProcessing(true);
+        setStatusText("📡 SOVEREIGN — Whisper STT processing audio");
+        console.log("[SubtitleOverlay] 06 — PCM polling started (3s interval)");
+
+        periodicTimerRef.current = setInterval(() => {
+            if (!processingRef.current || !flushAudioBuffer) return;
+            const pcmData = flushAudioBuffer();
+            if (pcmData) {
+                transcribePCM(pcmData);
+            }
+        }, 3000);
+    }, [flushAudioBuffer, transcribePCM]);
+
+    const stopPolling = useCallback(() => {
+        processingRef.current = false;
+        setIsProcessing(false);
+        if (periodicTimerRef.current) {
+            clearInterval(periodicTimerRef.current);
+            periodicTimerRef.current = null;
+        }
+    }, []);
+
+    // ─── Directive 018: Hardware-lock to video play state ───
     useEffect(() => {
-        if (!enabled) {
-            disconnectRelay();
-        }
-    }, [enabled, disconnectRelay]);
+        if (!enabled) return;
 
-    // ─── Reconnect on language change if currently connected ───
-    useEffect(() => {
-        if (isProcessing && eventSourceRef.current && streamUrl) {
-            connectRelay();
+        if (!isPlaying) {
+            stopPolling();
+            setCueQueue([]);
+            setStatusText("⏸ Paused — Subtitle engine idle");
+            return;
         }
-    }, [sourceLang, targetLang]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ─── Cleanup on unmount ───
+        if (!hasInteracted) return;
+
+        if (isCapturing) {
+            // ScriptProcessor active → start polling
+            const timer = setTimeout(() => startPolling(), 300);
+            return () => clearTimeout(timer);
+        } else {
+            onStartCapture?.();
+            setStatusText("📡 Connecting to Sovereign audio tap…");
+        }
+    }, [enabled, isPlaying, hasInteracted, isCapturing, startPolling, onStartCapture, stopPolling]);
+
+    // Stop when disabled
+    useEffect(() => { if (!enabled) stopPolling(); }, [enabled, stopPolling]);
+
+    // Cleanup on unmount
     useEffect(() => {
         return () => {
-            if (eventSourceRef.current) {
-                eventSourceRef.current.close();
-                eventSourceRef.current = null;
-            }
-            if (window.livingLogosSSE) {
-                window.livingLogosSSE.close();
-                window.livingLogosSSE = null;
-            }
+            processingRef.current = false;
+            clearTimeout(silenceFadeTimerRef.current);
+            if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
         };
     }, []);
 
@@ -261,10 +285,10 @@ export default function SubtitleOverlay({
                 <div className="subtitle-header">
                     <div
                         className={`subtitle-stream-indicator ${isProcessing ? "active" : ""}`}
-                        title={isProcessing ? "Sovereign Relay active" : "Waiting for interaction"}
+                        title={isProcessing ? "Sovereign audio tap active" : "Waiting for interaction"}
                     >
                         <span className="subtitle-stream-icon">{isProcessing ? "📡" : "⏳"}</span>
-                        <span className="subtitle-stream-label">{isProcessing ? "LIVE" : "READY"}</span>
+                        <span className="subtitle-stream-label">{isProcessing ? "SOVEREIGN" : "READY"}</span>
                     </div>
 
                     <div className="subtitle-lang-selector">
@@ -303,7 +327,7 @@ export default function SubtitleOverlay({
                     )}
                     <div className="glossary-lock-badge"><span>🔒</span></div>
                     {streamTier && <div className={`subtitle-tier-badge tier-${streamTier}`}>T{streamTier}</div>}
-                    <div className="subtitle-no-mic-badge" title="No microphone — server relay">🚫🎙️</div>
+                    <div className="subtitle-no-mic-badge" title="No microphone — sovereign audio tap">🚫🎙️</div>
                     <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
@@ -336,7 +360,7 @@ export default function SubtitleOverlay({
 
                 {/* Sovereignty Badge */}
                 <div className="subtitle-sovereignty-badge">
-                    <span>🛡️ Server Relay — No Microphone Required</span>
+                    <span>🛡️ Sovereign Audio Tap — No Microphone Required</span>
                 </div>
             </div>
 
@@ -530,28 +554,6 @@ export default function SubtitleOverlay({
                     font-size: 13px;
                     text-align: center;
                 }
-                .yt-capture-btn {
-                    display: block;
-                    margin: 10px auto 0;
-                    padding: 10px 24px;
-                    background: linear-gradient(135deg, rgba(212, 168, 83, 0.2), rgba(212, 168, 83, 0.1));
-                    border: 1px solid rgba(212, 168, 83, 0.4);
-                    border-radius: 8px;
-                    color: var(--color-gold, #d4a853);
-                    font-size: 14px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: all 0.3s ease;
-                    min-height: 44px;
-                }
-                .yt-capture-btn:hover {
-                    background: linear-gradient(135deg, rgba(212, 168, 83, 0.3), rgba(212, 168, 83, 0.15));
-                    border-color: rgba(212, 168, 83, 0.6);
-                    transform: scale(1.02);
-                }
-                .yt-capture-btn:active {
-                    transform: scale(0.98);
-                }
 
                 /* ── Directive 013: Scene Description & Meta Row ── */
                 .subtitle-meta-row {
@@ -602,12 +604,4 @@ export default function SubtitleOverlay({
             `}</style>
         </div>
     );
-}
-
-// Directive 013: Format seconds → MM:SS
-function formatTimestamp(seconds) {
-    if (seconds == null || isNaN(seconds)) return "0:00";
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s.toString().padStart(2, "0")}`;
 }
