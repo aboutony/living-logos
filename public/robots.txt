@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://living-logos.vercel.app/sitemap.xml
+
+# The Living Logos — Sovereign Orthodox Network
+# A legitimate Greek Orthodox digital broadcast platform.
+# Contact: admin@thelivinglogos.org
