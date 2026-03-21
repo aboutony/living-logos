@@ -213,5 +213,7 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
         stopCapture,
         /** Atomic 01.1: Explicit disposal for pause/unmount */
         cleanupAudio,
+        /** Atomic 04.4: Exposed ref so parent can call resume() synchronously */
+        audioCtxRef,
     };
 }

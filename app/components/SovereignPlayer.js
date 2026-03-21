@@ -169,6 +169,7 @@ export default function SovereignPlayer({
     startCapture,
     stopCapture,
     cleanupAudio,
+    audioCtxRef, // Atomic 04.4: Direct access for synchronous resume()
   } = useAudioStreamCapture(videoRef, hasInteracted);
 
   // ─── Directive 012: Auto-enable subtitles once user interacts ───
@@ -211,17 +212,51 @@ export default function SovereignPlayer({
     };
   }, [cleanupAudio]);
 
+  // ─── Atomic 04.4: Unified Power-On ── handleStart() ───
+  // Single synchronous chain: video.play() → audioCtx.resume() → startCapture()
+  // Zero await keywords. Clicking Play/CC/Unmute all funnel here.
+  function handleStart() {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // 1. video.play() — synchronous call, returns a promise but we don't await
+    video.play().catch(() => {});
+    setIsPlaying(true);
+
+    // 2. audioCtx.resume() — synchronous call in the gesture callstack
+    if (audioCtxRef.current) {
+      audioCtxRef.current.resume().catch(() => {});
+    }
+
+    // 3. startCapture() — synchronous (04.3 already made it non-async)
+    startCapture();
+
+    // 4. Cross-component: auto-enable subtitles on play
+    if (!subtitlesEnabled) {
+      setSubtitlesEnabled(true);
+    }
+
+    console.log("[SovereignPlayer] 04.4 — Unified handleStart() fired");
+  }
+
+  // Pause handler — separate from handleStart
+  function handlePause() {
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    // Atomic 01.1: Explicit disposal on pause
+    cleanupAudio();
+    setIsPlaying(false);
+  }
+
+  // Toggle: route to handleStart or handlePause
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
-      video.play();
-      setIsPlaying(true);
+      handleStart();
     } else {
-      video.pause();
-      // Atomic 01.1: Explicit disposal on pause
-      cleanupAudio();
-      setIsPlaying(false);
+      handlePause();
     }
   }
 
@@ -297,12 +332,9 @@ export default function SovereignPlayer({
     }, 3000);
   }
 
-  // Handle "Tap to Unmute Sanctuary" — satisfies browser gesture requirement
+  // Atomic 04.4: "Tap to Unmute Sanctuary" now routes through unified handleStart
   function handleUnmuteSanctuary() {
-    startCapture();
-    if (videoRef.current && videoRef.current.paused) {
-      videoRef.current.play().catch(() => { });
-    }
+    handleStart();
   }
 
   return (
@@ -413,7 +445,14 @@ export default function SovereignPlayer({
 
         <button
           className={`player-btn ${subtitlesEnabled ? "player-btn--active" : ""}`}
-          onClick={() => setSubtitlesEnabled(!subtitlesEnabled)}
+          onClick={() => {
+            if (subtitlesEnabled) {
+              setSubtitlesEnabled(false);
+            } else {
+              // Atomic 04.4: CC enable routes through unified handleStart
+              handleStart();
+            }
+          }}
           title={subtitlesEnabled ? "Hide Subtitles" : "Patristic AI Subtitles"}
         >
           CC
