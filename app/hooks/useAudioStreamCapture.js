@@ -9,10 +9,11 @@ import { useRef, useState, useEffect, useCallback } from "react";
  * using the Web Audio API. Returns a MediaStream that represents the
  * decoded PCM audio — NO microphone needed.
  *
- * Directive 012 additions:
- * - Accepts `hasInteracted` flag to auto-resume AudioContext
- * - Auto-starts capture when interaction is detected
- * - Exposes `needsInteraction` for UI feedback
+ * Atomic 04.1: Gesture-Locked Initialization
+ * - AudioContext created in suspended state
+ * - ctx.resume() is AWAITED inside the user gesture callstack
+ * - createMediaElementSource only runs after context is confirmed "running"
+ * - On failure: error = "Ready — Tap to Start" (no hang)
  */
 export default function useAudioStreamCapture(mediaElementRef, hasInteracted = false) {
     const [captureStream, setCaptureStream] = useState(null);
@@ -26,10 +27,12 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
     const connectedRef = useRef(false);
     const pendingStartRef = useRef(false);
 
-    const startCapture = useCallback(() => {
+    // ─── Atomic 04.1: Gesture-Locked Initialization ───
+    // AudioContext is created suspended. Only resume() + createMediaElementSource()
+    // happen AFTER a user gesture, ensuring no "Connecting..." hang.
+    const startCapture = useCallback(async () => {
         const el = mediaElementRef?.current;
         if (!el) {
-            // No element yet — mark pending so we try again when element is ready
             pendingStartRef.current = true;
             return;
         }
@@ -41,33 +44,41 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
         }
 
         try {
-            // Create or reuse AudioContext
+            // Step 1: Create AudioContext (starts suspended per browser policy)
             if (!audioCtxRef.current) {
                 const AudioCtx = window.AudioContext || window.webkitAudioContext;
                 audioCtxRef.current = new AudioCtx();
             }
             const ctx = audioCtxRef.current;
 
-            // Resume context if suspended (autoplay policy)
+            // Step 2: The Sacred Handshake — await resume() inside user gesture
             if (ctx.state === "suspended") {
-                if (hasInteracted) {
-                    ctx.resume().catch(() => {
-                        setNeedsInteraction(true);
-                    });
-                } else {
+                try {
+                    await ctx.resume();
+                    console.log("[AudioStreamCapture] AudioContext resumed via gesture");
+                } catch {
                     setNeedsInteraction(true);
+                    setError("Ready \u2014 Tap to Start");
                     pendingStartRef.current = true;
+                    console.warn("[AudioStreamCapture] resume failed \u2014 needs gesture");
                     return;
                 }
             }
 
-            // Create MediaElementSource (can only be called ONCE per element)
+            // Step 3: Guard — context must be running before tap
+            if (ctx.state !== "running") {
+                setNeedsInteraction(true);
+                setError("Ready \u2014 Tap to Start");
+                pendingStartRef.current = true;
+                return;
+            }
+
+            // Step 4: The Internal Tap — only after context is running
             if (!sourceNodeRef.current) {
                 sourceNodeRef.current = ctx.createMediaElementSource(el);
                 connectedRef.current = true;
             }
 
-            // Safety guard: create fresh destination if previous was cleaned up
             if (!destinationRef.current) {
                 destinationRef.current = ctx.createMediaStreamDestination();
             }
@@ -75,7 +86,6 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
             const source = sourceNodeRef.current;
             const destination = destinationRef.current;
 
-            // Disconnect first to prevent double-connections
             try { source.disconnect(); } catch { /* not connected yet */ }
 
             // Connect: source → speakers (so user still hears audio)
@@ -88,12 +98,13 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
             setNeedsInteraction(false);
             setError(null);
             pendingStartRef.current = false;
+            console.log("[AudioStreamCapture] Internal tap active \u2014 capture stream ready");
         } catch (err) {
             console.error("[AudioStreamCapture] Failed:", err);
-            setError(err.message);
+            setError("Ready \u2014 Tap to Start");
             setIsCapturing(false);
         }
-    }, [mediaElementRef, captureStream, hasInteracted]);
+    }, [mediaElementRef, captureStream]);
 
     // ─── Atomic 01.1: Explicit stream disposal ───
     const cleanupAudio = useCallback(() => {
@@ -114,7 +125,7 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
         // State reset — prevents "Cannot call write on destroyed stream"
         setCaptureStream(null);
         setIsCapturing(false);
-        console.log("[AudioStreamCapture] cleanupAudio — stream disposed & nulled");
+        console.log("[AudioStreamCapture] cleanupAudio \u2014 stream disposed & nulled");
     }, []);
 
     const stopCapture = useCallback(() => {
