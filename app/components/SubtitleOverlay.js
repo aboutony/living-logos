@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 /**
- * SubtitleOverlay — Directives 011, 012, 013, 016 & 018
+ * SubtitleOverlay — Directives 011, 012, 013, 016 & 018 + Atomic 04.7
  *
  * 011: Internal digital audio stream processing, no microphone
  * 012: Zero-click activation on first user interaction
@@ -11,6 +11,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
  * 016: Sacred Glossary Enforcement, 50% font increase, anti-loop real-time sync
  * 018: Hardware-locked — 0% functional without live audio feed.
  *      Tied to HTMLMediaElement.currentTime. Pause → idle + clear.
+ *
+ * Atomic 04.7: SSE Injection — All audio extraction is server-side via ffmpeg.
+ *              Client opens EventSource → receives translated subtitles.
+ *              ZERO AudioContext. ZERO ScriptProcessor. ZERO MediaRecorder.
  *
  * RTL Languages: Arabic (ar), Persian (fa), Hebrew (he), Urdu (ur)
  * Automatically applies `direction: rtl` and `text-align: right` for these.
@@ -64,10 +68,8 @@ export default function SubtitleOverlay({
     onClose,
     autoEnable,
     streamTier,
-    flushAudioBuffer,  // Atomic 04.5: PCM buffer flush function
-    isCapturing,       // Atomic 04.5: Whether ScriptProcessor is active
+    streamUrl,        // Atomic 04.7: The media URL for server-side ffmpeg extraction
     captureError,
-    onStartCapture,
     isYouTubeMode,
     hasInteracted,
     isPlaying = false, // Directive 018: hardware-lock to video state
@@ -82,319 +84,119 @@ export default function SubtitleOverlay({
     const [statusText, setStatusText] = useState("📡 Waiting for first interaction…");
     const [sceneDesc, setSceneDesc] = useState("");
 
-    const processingRef = useRef(false);
-    // Atomic 04.5: recorderRef REMOVED — no more MediaRecorder
-    const translateTimeout = useRef(null);
-    const periodicTimerRef = useRef(null);
-    const sourceLangRef = useRef(sourceLang);
-    const targetLangRef = useRef(targetLang);
-    const cueTimerRef = useRef(null);
-    const lastCueIdRef = useRef(null);
-    // Atomic 04: tabStreamRef/hasTabStream REMOVED — getDisplayMedia purged
-
-    useEffect(() => { sourceLangRef.current = sourceLang; }, [sourceLang]);
-    useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
-
     // Directive 013: RTL detection
     const isTargetRTL = RTL_CODES.has(targetLang);
     const isSourceRTL = RTL_CODES.has(sourceLang);
 
-    // ─── Translate via Patristic AI ───
-    const translateSpeech = useCallback(async (text, cueId, previousContext) => {
-        if (!text || text.length < 2) return;
-        try {
-            const res = await fetch("/api/ai/translate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    text,
-                    sourceLang: sourceLangRef.current,
-                    targetLang: targetLangRef.current,
-                    streamId,
-                    context: previousContext || "",
-                }),
-            });
-            const data = await res.json();
-            if (data.success && data.translation) {
-                setCueQueue(prev => prev.map(c =>
-                    c.id === cueId
-                        ? { ...c, translated: data.translation.translatedText || text }
-                        : c
-                ));
-                setSacredTermCount(data.translation.sacredTerms?.length || 0);
-                setVetted(data.translation.sacredTerms?.length > 0);
-                setStatusText("📡 Live — Translating internal stream");
-            }
-        } catch {
-            // Silent fail — will retry on next cue
-        }
-    }, [streamId]);
-
-    // ─── Directive 013: Process timestamped transcription cue ───
-    const processTranscriptionCue = useCallback((transcript, cue) => {
-        // Deduplicate: skip if same cue
-        if (cue && cue.id === lastCueIdRef.current) return;
-        if (cue) lastCueIdRef.current = cue.id;
-
-        const cueId = cue?.id || `cue-${Date.now()}`;
-        if (cue?.scene) setSceneDesc(cue.scene);
-
-        // Add to queue (keep last 3)
-        const newCue = {
-            id: cueId,
-            text: transcript,
-            translated: null, // fills in when translation arrives
-            timestamp: Date.now(),
-        };
-        setCueQueue(prev => {
-            const updated = [...prev.slice(-2), newCue];
-            // Build rolling context from previous cues for GPT
-            const previousContext = prev.slice(-2).map(c => c.text).join(" ");
-            translateSpeech(transcript, cueId, previousContext);
-            return updated;
-        });
-
-        // Auto-expire this cue after 10 seconds
-        setTimeout(() => {
-            setCueQueue(prev => prev.filter(c => c.id !== cueId));
-        }, 10000);
-    }, [translateSpeech]);
-    // ─── Atomic 03: Voice Activity Detection (VAD) — Silence Suppression ───
-    const VAD_SILENCE_THRESHOLD = 0.01; // RMS below this = silence
-    const silenceStreakRef = useRef(0);
-    const silenceFadeTimerRef = useRef(null);
-
-    /**
-     * Atomic 04.5: Encode Float32Array PCM → WAV → base64
-     * Creates a valid WAV file from raw PCM samples for Whisper API.
-     */
-    const pcmToWavBase64 = useCallback((samples, sampleRate) => {
-        const numChannels = 1;
-        const bitsPerSample = 16;
-        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-        const blockAlign = numChannels * (bitsPerSample / 8);
-        const dataSize = samples.length * (bitsPerSample / 8);
-        const buffer = new ArrayBuffer(44 + dataSize);
-        const view = new DataView(buffer);
-
-        // WAV header
-        const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
-        writeStr(0, 'RIFF');
-        view.setUint32(4, 36 + dataSize, true);
-        writeStr(8, 'WAVE');
-        writeStr(12, 'fmt ');
-        view.setUint32(16, 16, true);           // fmt chunk size
-        view.setUint16(20, 1, true);            // PCM format
-        view.setUint16(22, numChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, byteRate, true);
-        view.setUint16(32, blockAlign, true);
-        view.setUint16(34, bitsPerSample, true);
-        writeStr(36, 'data');
-        view.setUint32(40, dataSize, true);
-
-        // Convert Float32 → Int16 PCM
-        let offset = 44;
-        for (let i = 0; i < samples.length; i++) {
-            const s = Math.max(-1, Math.min(1, samples[i]));
-            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-            offset += 2;
-        }
-
-        // Convert to base64
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        return btoa(binary);
-    }, []);
-
-    /**
-     * Atomic 04.5: Compute RMS directly on Float32Array PCM samples.
-     * No AudioContext decoding needed — samples are already raw PCM.
-     */
-    const computeRMSFromPCM = useCallback((samples) => {
-        if (!samples || samples.length === 0) return 0;
-        let sumSquares = 0;
-        for (let i = 0; i < samples.length; i++) {
-            sumSquares += samples[i] * samples[i];
-        }
-        return Math.sqrt(sumSquares / samples.length);
-    }, []);
-
-    // ─── Atomic 04.5 + Directive 018: Transcribe from raw PCM Float32 ───
-    // ─── Atomic 02: Any-to-Any relay — sends targetLang for single round-trip ───
-    // ─── Atomic 03: VAD gate — skip POST if silence detected ───
-    const transcribeAndTranslatePCM = useCallback(async (pcmData) => {
-        // D018: Hard requirement — no PCM data = no transcription
-        if (!pcmData || !pcmData.samples || pcmData.samples.length === 0) return;
-
-        // Atomic 03: VAD — compute RMS directly on PCM samples
-        const rms = computeRMSFromPCM(pcmData.samples);
-        if (rms < VAD_SILENCE_THRESHOLD) {
-            silenceStreakRef.current++;
-            console.log(`[VAD] Skipped (Silence) — RMS: ${rms.toFixed(4)}, streak: ${silenceStreakRef.current}`);
-
-            // Atomic 03: Subtitle persistence — keep last cue for 5s then fade
-            if (silenceStreakRef.current === 1) {
-                if (silenceFadeTimerRef.current) clearTimeout(silenceFadeTimerRef.current);
-                silenceFadeTimerRef.current = setTimeout(() => {
-                    setCueQueue([]);
-                    setStatusText("\ud83d\udce1 Listening\u2026 (silence detected)");
-                    silenceFadeTimerRef.current = null;
-                }, 5000);
-            }
-            return; // Skip POST — save API cost
-        }
-
-        // Speech detected — reset silence streak and cancel fade timer
-        silenceStreakRef.current = 0;
-        if (silenceFadeTimerRef.current) {
-            clearTimeout(silenceFadeTimerRef.current);
-            silenceFadeTimerRef.current = null;
-        }
-        console.log(`[VAD] Sent (Speech) — RMS: ${rms.toFixed(4)}`);
-
-        try {
-            // Atomic 04.5: Convert Float32 PCM → WAV → base64
-            const audioData = pcmToWavBase64(pcmData.samples, pcmData.sampleRate);
-
-            const res = await fetch("/api/ai/transcribe", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    audioData,
-                    format: "wav",
-                    sourceLang: sourceLangRef.current,
-                    targetLang: targetLangRef.current,
-                    streamId,
-                }),
-            });
-            const data = await res.json();
-            if (data.success && data.transcript) {
-                // Atomic 02: If the relay returned a pre-translated text, use it directly
-                if (data.translatedText) {
-                    const cueId = data.cue?.id || `cue-${Date.now()}`;
-                    if (data.cue?.scene) setSceneDesc(data.cue.scene);
-                    if (data.sacredTerms?.length > 0) {
-                        setSacredTermCount(data.sacredTerms.length);
-                        setVetted(true);
-                    }
-                    const newCue = {
-                        id: cueId,
-                        text: data.transcript,
-                        translated: data.translatedText,
-                        timestamp: Date.now(),
-                    };
-                    setCueQueue(prev => [...prev.slice(-2), newCue]);
-                    setStatusText("\ud83d\udce1 Live \u2014 Any-to-Any relay active");
-                    // Auto-expire this cue after 10 seconds
-                    setTimeout(() => {
-                        setCueQueue(prev => prev.filter(c => c.id !== cueId));
-                    }, 10000);
-                } else {
-                    // Fallback: no translation from relay, use separate translate path
-                    processTranscriptionCue(data.transcript, data.cue || null);
-                }
-            } else if (!data.success && data.error) {
-                console.error("[SubtitleOverlay] Whisper error:", data.error);
-                setStatusText("\u26a0 " + data.error);
-            }
-        } catch (err) {
-            console.error("[SubtitleOverlay] Transcription failed:", err);
-        }
-    }, [streamId, processTranscriptionCue, pcmToWavBase64, computeRMSFromPCM]);
-
-    // ─── Atomic 04.5: Start PCM Polling (replaces MediaRecorder) ───
-    // Every 3 seconds, flush the PCM buffer and send to Whisper API.
-    // Zero MediaRecorder. Zero browser popups.
-    const startPCMProcessing = useCallback(() => {
-        if (processingRef.current) return;
-        processingRef.current = true;
-        setIsProcessing(true);
-        setStatusText("\ud83d\udce1 Live \u2014 Whisper STT processing audio");
-        console.log("[SubtitleOverlay] 04.5 \u2014 PCM polling started (3s interval)");
-
-        periodicTimerRef.current = setInterval(() => {
-            if (!processingRef.current || !flushAudioBuffer) return;
-            const pcmData = flushAudioBuffer();
-            if (pcmData) {
-                transcribeAndTranslatePCM(pcmData);
-            }
-        }, 3000);
-    }, [flushAudioBuffer, transcribeAndTranslatePCM]);
-
-    // ─── Stop all processing ───
-    const stopProcessing = useCallback(() => {
-        processingRef.current = false;
-        setIsProcessing(false);
-        // Atomic 04.5: No MediaRecorder to stop — just clear the interval
-        if (periodicTimerRef.current) {
-            clearInterval(periodicTimerRef.current);
-            periodicTimerRef.current = null;
-        }
-    }, []);
-
-    // ─── Directive 018 + Atomic 04.5: Hardware-lock to video play state ───
-    // Uses isCapturing (ScriptProcessor active) instead of mediaStream
-    // AbortController prevents stale callbacks
+    // ─── Atomic 04.7: SSE Stability Guard ───
+    // Single useEffect — opens EventSource when enabled + playing + streamUrl.
+    // Returns eventSource.close() to prevent vicious circle of multiple connections.
     useEffect(() => {
-        if (!enabled) return;
-
-        const controller = new AbortController();
-        const { signal } = controller;
-
-        if (!isPlaying) {
-            // VIDEO PAUSED → instant idle + clear
-            stopProcessing();
-            setCueQueue([]);
-            setSceneDesc("");
-            setStatusText("\u23f8 Paused \u2014 Subtitle engine idle");
-            return () => { controller.abort(); };
+        // Gate: all three conditions must be true
+        if (!enabled || !isPlaying || !streamUrl) {
+            setIsProcessing(false);
+            if (!isPlaying && enabled) {
+                setCueQueue([]);
+                setSceneDesc("");
+                setStatusText("⏸ Paused — Subtitle engine idle");
+            }
+            return;
         }
 
-        // VIDEO PLAYING → attempt to start PCM polling via ScriptProcessor tap
-        if (!hasInteracted) return () => { controller.abort(); };
+        // Build SSE URL
+        const params = new URLSearchParams({
+            streamUrl,
+            sourceLang,
+            targetLang,
+            streamId: streamId || "",
+        });
+        const sseUrl = `/api/ai/transcribe/stream?${params.toString()}`;
 
-        if (isCapturing) {
-            // Atomic 04.5: ScriptProcessor is active — start PCM polling
-            const timer = setTimeout(() => {
-                if (!signal.aborted) startPCMProcessing();
-            }, 300);
-            return () => {
-                controller.abort();
-                clearTimeout(timer);
-            };
-        } else {
-            if (!signal.aborted) onStartCapture?.();
-            setStatusText("\ud83d\udce1 Connecting to internal audio buffer\u2026");
-            return () => { controller.abort(); };
-        }
-    }, [enabled, isPlaying, hasInteracted, isCapturing, startPCMProcessing, onStartCapture, stopProcessing]);
+        console.log("[SubtitleOverlay] 04.7 — Opening SSE connection:", sseUrl);
+        setStatusText("📡 Connecting to Sovereign Relay…");
+
+        const eventSource = new EventSource(sseUrl);
+
+        eventSource.onopen = () => {
+            console.log("[SubtitleOverlay] SSE connected");
+            setIsProcessing(true);
+            setStatusText("📡 Connected to Sovereign Relay");
+        };
+
+        eventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+
+                switch (data.type) {
+                    case "status":
+                        setStatusText(data.message || "📡 Relay active");
+                        setIsProcessing(true);
+                        break;
+
+                    case "transcription": {
+                        if (!data.success || !data.translatedText) break;
+
+                        const cueId = data.cue?.id || Date.now();
+                        const newCue = {
+                            id: cueId,
+                            text: data.transcript,
+                            translated: data.translatedText,
+                            timestamp: Date.now(),
+                        };
+
+                        setCueQueue(prev => [...prev.slice(-2), newCue]);
+                        setStatusText("📡 Connected to Sovereign Relay");
+
+                        // Sacred term tracking
+                        if (data.sacredTerms?.length > 0) {
+                            setSacredTermCount(data.sacredTerms.length);
+                            setVetted(true);
+                        }
+
+                        // Auto-expire cue after 10 seconds
+                        setTimeout(() => {
+                            setCueQueue(prev => prev.filter(c => c.id !== cueId));
+                        }, 10000);
+                        break;
+                    }
+
+                    case "vad":
+                        // Server detected silence — no action needed, keep last cue visible
+                        break;
+
+                    case "error":
+                        console.error("[SubtitleOverlay] SSE error:", data.message);
+                        setStatusText("⚠ " + (data.message || "Relay error"));
+                        break;
+
+                    default:
+                        break;
+                }
+            } catch (err) {
+                console.error("[SubtitleOverlay] Failed to parse SSE data:", err);
+            }
+        };
+
+        eventSource.onerror = () => {
+            console.warn("[SubtitleOverlay] SSE connection error / closed");
+            setIsProcessing(false);
+            setStatusText("📡 Reconnecting to Sovereign Relay…");
+        };
+
+        // ─── Stability Guard: Clean close on unmount / re-render ───
+        return () => {
+            console.log("[SubtitleOverlay] 04.7 — Closing SSE connection");
+            eventSource.close();
+            setIsProcessing(false);
+        };
+    }, [enabled, isPlaying, streamUrl, sourceLang, targetLang, streamId]);
 
     // ─── Stop when disabled ───
-    useEffect(() => { if (!enabled) stopProcessing(); }, [enabled, stopProcessing]);
-
-    // ─── Cleanup ───
     useEffect(() => {
-        return () => {
-            processingRef.current = false;
-            // Atomic 04.5: No MediaRecorder to stop
-            clearTimeout(translateTimeout.current);
-            clearTimeout(cueTimerRef.current);
-            clearTimeout(silenceFadeTimerRef.current); // Atomic 03
-            if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
-        };
-    }, []);
-
-    // ─── Re-translate on target language change ───
-    useEffect(() => {
-        cueQueue.forEach(cue => translateSpeech(cue.text, cue.id));
-    }, [targetLang]);
-
-    // ─── Restart processing on source language change ───
-    useEffect(() => {
-        if (processingRef.current) stopProcessing();
-    }, [sourceLang, stopProcessing]);
+        if (!enabled) {
+            setIsProcessing(false);
+        }
+    }, [enabled]);
 
     if (!enabled) return null;
 
@@ -405,7 +207,7 @@ export default function SubtitleOverlay({
                 <div className="subtitle-header">
                     <div
                         className={`subtitle-stream-indicator ${isProcessing ? "active" : ""}`}
-                        title={isProcessing ? "Internal stream active" : "Waiting for interaction"}
+                        title={isProcessing ? "Sovereign Relay active" : "Waiting for interaction"}
                     >
                         <span className="subtitle-stream-icon">{isProcessing ? "📡" : "⏳"}</span>
                         <span className="subtitle-stream-label">{isProcessing ? "LIVE" : "READY"}</span>
@@ -447,7 +249,7 @@ export default function SubtitleOverlay({
                     )}
                     <div className="glossary-lock-badge"><span>🔒</span></div>
                     {streamTier && <div className={`subtitle-tier-badge tier-${streamTier}`}>T{streamTier}</div>}
-                    <div className="subtitle-no-mic-badge" title="No microphone — internal stream">🚫🎙️</div>
+                    <div className="subtitle-no-mic-badge" title="No microphone — server relay">🚫🎙️</div>
                     <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
@@ -474,14 +276,13 @@ export default function SubtitleOverlay({
                     ) : (
                         <div className="subtitle-status">
                             {statusText}
-                            {/* Atomic 04: YouTube capture button REMOVED — internal tap only */}
                         </div>
                     )}
                 </div>
 
                 {/* Sovereignty Badge */}
                 <div className="subtitle-sovereignty-badge">
-                    <span>🛡️ Internal Audio — No Microphone Required</span>
+                    <span>🛡️ Server Relay — No Microphone Required</span>
                 </div>
             </div>
 

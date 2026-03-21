@@ -2,7 +2,6 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import SubtitleOverlay from "./SubtitleOverlay";
-import useAudioStreamCapture from "../hooks/useAudioStreamCapture";
 import useUserInteraction from "../hooks/useUserInteraction";
 
 /**
@@ -83,9 +82,8 @@ function YouTubePlayerMode({
           onClose={() => setSubtitlesEnabled(false)}
           autoEnable={autoSubtitles}
           streamTier={streamTier}
-          mediaStream={null}
+          streamUrl={null}
           captureError={null}
-          onStartCapture={() => { }}
           isYouTubeMode={true}
           hasInteracted={hasInteracted}
           isPlaying={true}
@@ -160,18 +158,6 @@ export default function SovereignPlayer({
   // ─── Directive 012: Global Interaction Listener ───
   const { hasInteracted } = useUserInteraction();
 
-  // ─── Directive 011 + Atomic 04.5: Internal Audio Capture (ScriptProcessor PCM Tap) ───
-  const {
-    isCapturing,
-    error: captureError,
-    needsInteraction,
-    startCapture,
-    stopCapture,
-    cleanupAudio,
-    audioCtxRef,
-    flushAudioBuffer, // Atomic 04.5: Returns accumulated PCM Float32Array
-  } = useAudioStreamCapture(videoRef, hasInteracted);
-
   // ─── Directive 012: Auto-enable subtitles once user interacts ───
   useEffect(() => {
     if (hasInteracted && autoSubtitles && !subtitlesEnabled) {
@@ -205,47 +191,23 @@ export default function SovereignPlayer({
     setSubtitleKey((k) => k + 1);
   }, [src]);
 
-  // Atomic 01.1: Explicit disposal on unmount
-  useEffect(() => {
-    return () => {
-      cleanupAudio();
-    };
-  }, [cleanupAudio]);
-
-  // ─── Atomic 04.4: Unified Power-On ── handleStart() ───
-  // Single synchronous chain: video.play() → audioCtx.resume() → startCapture()
-  // Zero await keywords. Clicking Play/CC/Unmute all funnel here.
+  // ─── Atomic 04.6: Unified Power-On — handleStart() ───
+  // Audio extraction is server-side. Client just plays video + enables subtitles.
   function handleStart() {
     const video = videoRef.current;
     if (!video) return;
-
-    // 1. video.play() — synchronous call, returns a promise but we don't await
     video.play().catch(() => {});
     setIsPlaying(true);
-
-    // 2. audioCtx.resume() — synchronous call in the gesture callstack
-    if (audioCtxRef.current) {
-      audioCtxRef.current.resume().catch(() => {});
-    }
-
-    // 3. startCapture() — synchronous (04.3 already made it non-async)
-    startCapture();
-
-    // 4. Cross-component: auto-enable subtitles on play
     if (!subtitlesEnabled) {
       setSubtitlesEnabled(true);
     }
-
-    console.log("[SovereignPlayer] 04.4 — Unified handleStart() fired");
+    console.log("[SovereignPlayer] 04.6 — Unified handleStart() fired (server relay)");
   }
 
-  // Pause handler — separate from handleStart
   function handlePause() {
     const video = videoRef.current;
     if (!video) return;
     video.pause();
-    // Atomic 01.1: Explicit disposal on pause
-    cleanupAudio();
     setIsPlaying(false);
   }
 
@@ -383,21 +345,13 @@ export default function SovereignPlayer({
             </div>
           )}
 
-          {/* Directive 012: "Tap to Unmute Sanctuary" — gold center button */}
-          {needsInteraction && !hasInteracted && (
-            <div className="unmute-sanctuary-overlay">
-              <button className="unmute-sanctuary-btn" onClick={handleUnmuteSanctuary}>
-                <span className="unmute-sanctuary-icon">☦</span>
-                <span className="unmute-sanctuary-text">Tap to Unmute Sanctuary</span>
-              </button>
-            </div>
-          )}
+          {/* Atomic 04.6: Unmute Sanctuary removed — no client-side AudioContext */}
         </>
       )}
 
       {children}
 
-      {/* Patristic AI Subtitle Overlay — Directives 011+012+017+018 + Atomic 04.5 */}
+      {/* Patristic AI Subtitle Overlay — Atomic 04.7: SSE Server Relay */}
       {!youtubeChannel && (
         <SubtitleOverlay
           key={`sub-${subtitleKey}`}
@@ -406,10 +360,8 @@ export default function SovereignPlayer({
           onClose={() => setSubtitlesEnabled(false)}
           autoEnable={autoSubtitles}
           streamTier={streamTier}
-          flushAudioBuffer={flushAudioBuffer}
-          isCapturing={isCapturing}
-          captureError={captureError}
-          onStartCapture={startCapture}
+          streamUrl={src}
+          captureError={null}
           isYouTubeMode={false}
           hasInteracted={hasInteracted}
           isPlaying={isPlaying}
