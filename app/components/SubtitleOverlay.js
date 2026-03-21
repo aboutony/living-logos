@@ -159,12 +159,69 @@ export default function SubtitleOverlay({
             setCueQueue(prev => prev.filter(c => c.id !== cueId));
         }, 10000);
     }, [translateSpeech]);
+    // ─── Atomic 03: Voice Activity Detection (VAD) — Silence Suppression ───
+    const VAD_SILENCE_THRESHOLD = 0.01; // RMS below this = silence
+    const silenceStreakRef = useRef(0);
+    const silenceFadeTimerRef = useRef(null);
+
+    /**
+     * Atomic 03: Compute RMS (Root Mean Square) energy of an audio blob.
+     * Decodes the blob into PCM float samples and calculates volume level.
+     * Returns a value between 0 (silence) and 1 (max volume).
+     */
+    const computeRMS = useCallback(async (audioBlob) => {
+        try {
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            const offlineCtx = new AudioCtx();
+            const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
+            const samples = audioBuffer.getChannelData(0);
+            let sumSquares = 0;
+            for (let i = 0; i < samples.length; i++) {
+                sumSquares += samples[i] * samples[i];
+            }
+            offlineCtx.close().catch(() => {});
+            return Math.sqrt(sumSquares / samples.length);
+        } catch {
+            // If decoding fails, assume speech to avoid false silencing
+            return 1;
+        }
+    }, []);
 
     // ─── Directive 018: Transcribe ONLY with real audio data ───
     // ─── Atomic 02: Any-to-Any relay — sends targetLang for single round-trip ───
+    // ─── Atomic 03: VAD gate — skip POST if silence detected ───
     const transcribeAndTranslate = useCallback(async (audioBlob) => {
         // D018: Hard requirement — no audio blob = no transcription
         if (!audioBlob || audioBlob.size === 0) return;
+
+        // Atomic 03: VAD — compute RMS volume of this chunk
+        const rms = await computeRMS(audioBlob);
+        if (rms < VAD_SILENCE_THRESHOLD) {
+            silenceStreakRef.current++;
+            console.log(`[VAD] Skipped (Silence) — RMS: ${rms.toFixed(4)}, streak: ${silenceStreakRef.current}`);
+
+            // Atomic 03: Subtitle persistence — keep last cue for 5s then fade
+            if (silenceStreakRef.current === 1) {
+                // First silent chunk after speech — start 5s persistence timer
+                if (silenceFadeTimerRef.current) clearTimeout(silenceFadeTimerRef.current);
+                silenceFadeTimerRef.current = setTimeout(() => {
+                    setCueQueue([]);
+                    setStatusText("📡 Listening… (silence detected)");
+                    silenceFadeTimerRef.current = null;
+                }, 5000);
+            }
+            return; // Skip POST — save API cost
+        }
+
+        // Speech detected — reset silence streak and cancel fade timer
+        silenceStreakRef.current = 0;
+        if (silenceFadeTimerRef.current) {
+            clearTimeout(silenceFadeTimerRef.current);
+            silenceFadeTimerRef.current = null;
+        }
+        console.log(`[VAD] Sent (Speech) — RMS: ${rms.toFixed(4)}`);
+
         try {
             const reader = new FileReader();
             const base64Promise = new Promise((resolve) => {
@@ -402,6 +459,7 @@ export default function SubtitleOverlay({
             }
             clearTimeout(translateTimeout.current);
             clearTimeout(cueTimerRef.current);
+            clearTimeout(silenceFadeTimerRef.current); // Atomic 03
             if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
             if (tabStreamRef.current) {
                 tabStreamRef.current.getTracks().forEach(t => t.stop());
