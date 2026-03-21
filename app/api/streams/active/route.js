@@ -6,8 +6,34 @@ import { getActiveStreams } from "@/lib/streams";
  * Returns all currently active streams with coordinates and metadata.
  * Powers the Global Aggregator Map.
  *
+ * ATOMIC COMMAND 13.4 — "North Star" Hard-Code:
+ * The Holy Bishopric of Morphou is ALWAYS present as the primary stream.
+ *
  * Query params: liveOnly, language, rite, tier, sealedOnly
  */
+
+// ═══════════════════════════════════════════════════════
+// NORTH STAR: Hard-coded Morphou stream entry
+// This MUST always be present in the response.
+// ═══════════════════════════════════════════════════════
+const MORPHOU_STREAM = {
+    id: "stream-morphou-001",
+    name: "Holy Bishopric of Morphou",
+    location: "Morphou, Cyprus",
+    lat: 35.2,
+    lng: 32.99,
+    language: "el",
+    rite: "Byzantine",
+    authority: "Metropolitan Neophytos of Morphou",
+    isLive: true,
+    isHQ: true,
+    digitalSeal: true,
+    viewerCount: 0,
+    pinned: true,
+    youtubeChannel: null,
+    ytUrl: "https://www.youtube.com/watch?v=sAgVuOFLfzA",
+};
+
 export async function GET(request) {
     const { searchParams } = new URL(request.url);
 
@@ -19,12 +45,17 @@ export async function GET(request) {
         sealedOnly: searchParams.get("sealedOnly") === "true",
     };
 
-    const streams = getActiveStreams(filters);
+    let streams = [];
+    try {
+        streams = getActiveStreams(filters);
+    } catch {
+        /* Fallback: proceed with hard-coded Morphou only */
+    }
 
-    return NextResponse.json({
-        count: streams.length,
-        filters,
-        streams: streams.map((s) => ({
+    // Remove any existing morphou entry to avoid duplicates
+    const otherStreams = streams
+        .filter((s) => s.id !== "stream-morphou-001")
+        .map((s) => ({
             id: s.id,
             name: s.name,
             location: s.location,
@@ -34,11 +65,19 @@ export async function GET(request) {
             rite: s.rite,
             authority: s.authority,
             isLive: s.isLive,
-            isHQ: s.isHQ || false, // Directive 015: Sovereign Red HQ flag
+            isHQ: s.isHQ || false,
             digitalSeal: s.digitalSeal,
             viewerCount: s.viewerCount,
             pinned: s.pinned || false,
             youtubeChannel: s.youtubeChannel || null,
-        })),
+        }));
+
+    // Morphou is ALWAYS first
+    const allStreams = [MORPHOU_STREAM, ...otherStreams];
+
+    return NextResponse.json({
+        count: allStreams.length,
+        filters,
+        streams: allStreams,
     });
 }

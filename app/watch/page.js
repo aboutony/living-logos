@@ -48,10 +48,21 @@ function WatchContent() {
   useEffect(() => {
     async function fetchStream() {
       try {
-        const res = await fetch("/api/streams/active");
-        const data = await res.json();
-        const found = data.streams?.find((s) => s.id === streamId);
-        setStream(found || data.streams?.[0] || null);
+        // Atomic 16: VOD items route through /api/library
+        if (streamId && streamId.startsWith("vod-")) {
+          const res = await fetch(`/api/library/${encodeURIComponent(streamId)}`);
+          const data = await res.json();
+          if (data.success && data.stream) {
+            setStream(data.stream);
+          } else {
+            setStream(null);
+          }
+        } else {
+          const res = await fetch("/api/streams/active");
+          const data = await res.json();
+          const found = data.streams?.find((s) => s.id === streamId);
+          setStream(found || data.streams?.[0] || null);
+        }
       } catch (err) {
         console.error("Failed to fetch stream:", err);
       } finally {
@@ -61,9 +72,11 @@ function WatchContent() {
     fetchStream();
   }, [streamId]);
 
-  // ── Directive 022: Poll ICY Metadata when Radio is active ──
+  // ── Atomic 05 + Directive 022: Poll metadata when Radio is active ──
+  // Dual-source: Direct Pipe metadata (source=pipe) for yt-dlp streams,
+  // ICY metadata for external Icecast/Shoutcast stations.
   useEffect(() => {
-    if (playerMode !== "radio" || !stream?.radioUrl) {
+    if (playerMode !== "radio") {
       setNowPlaying(null);
       if (metaPollRef.current) clearInterval(metaPollRef.current);
       return;
@@ -71,9 +84,12 @@ function WatchContent() {
 
     async function fetchMeta() {
       try {
-        const res = await fetch(
-          `/api/streams/radio-meta?url=${encodeURIComponent(stream.radioUrl)}`
-        );
+        // Use Direct Pipe metadata if stream has a ytUrl (Live/VOD),
+        // otherwise fall back to ICY metadata for external radio
+        const url = stream?.radioUrl
+          ? `/api/streams/radio-meta?url=${encodeURIComponent(stream.radioUrl)}`
+          : `/api/streams/radio-meta?source=pipe`;
+        const res = await fetch(url);
         const data = await res.json();
         if (data.success && data.metadata) {
           setNowPlaying({
@@ -85,7 +101,7 @@ function WatchContent() {
     }
 
     fetchMeta();
-    metaPollRef.current = setInterval(fetchMeta, 15000);
+    metaPollRef.current = setInterval(fetchMeta, 10000);
     return () => clearInterval(metaPollRef.current);
   }, [playerMode, stream?.radioUrl]);
 
@@ -152,7 +168,10 @@ function WatchContent() {
         {isRadioMode ? (
           <SovereignRadio
             ref={radioRef}
-            radioUrl={stream?.radioUrl || null}
+            radioUrl={
+              stream?.radioUrl
+                || (stream?.ytUrl ? `/api/radio/stream?url=${encodeURIComponent(stream.ytUrl)}&streamId=${encodeURIComponent(stream?.id || "")}` : null)
+            }
             nowPlaying={nowPlaying}
             streamName={stream?.name}
             onPlay={() => { }}
@@ -160,12 +179,14 @@ function WatchContent() {
           />
         ) : (
           <SovereignPlayer
-            src={null}
+            src={stream?.ytUrl || null}
             isAudioOnly={isAudioOnly}
             streamId={stream?.id}
             autoSubtitles={stream?.authority?.level <= 2}
             streamTier={stream?.authority?.level}
             youtubeChannel={stream?.youtubeChannel}
+            ytVideoId={stream?.ytVideoId}
+            isVOD={stream?.isVOD || false}
           />
         )}
       </div>
@@ -185,6 +206,7 @@ function WatchContent() {
             <div className="watch-info-top">
               <div>
                 {stream.isLive && <span className="badge badge-live">● LIVE</span>}
+                {stream.isVOD && <span className="badge badge-live" style={{ background: "rgba(212, 168, 83, 0.15)", color: "var(--color-gold)", border: "1px solid rgba(212, 168, 83, 0.3)" }}>📡 VOD RELAY</span>}
                 <h1 className="watch-title">{stream.name}</h1>
                 <p className="text-secondary watch-location">{stream.location}</p>
               </div>

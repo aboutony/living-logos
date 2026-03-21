@@ -12,6 +12,8 @@ function YouTubePlayerMode({
   youtubeChannel, streamId, subtitlesEnabled, setSubtitlesEnabled,
   autoSubtitles, streamTier, hasInteracted
 }) {
+  // Atomic 12.2: Ref for synchronous SSE Direct Pipe relay
+  const relayRef = useRef(null);
   const [videos, setVideos] = useState([]);
   const [activeVideo, setActiveVideo] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -74,7 +76,7 @@ function YouTubePlayerMode({
         />
         {/* Subtitle Overlay — YouTube mode */}
         {/* Directive 017: key forces remount on video change (multi-video purge) */}
-        {/* Directive 018: isPlaying tied to video state */}
+        {/* Atomic 12.2: Direct Pipe — pass YouTube URL for yt-dlp resolution */}
         <SubtitleOverlay
           key={`yt-sub-${activeVideo?.videoId}`}
           streamId={streamId || "stream-rumorthodox"}
@@ -82,11 +84,12 @@ function YouTubePlayerMode({
           onClose={() => setSubtitlesEnabled(false)}
           autoEnable={autoSubtitles}
           streamTier={streamTier}
-          streamUrl={null}
+          streamUrl={activeVideo ? `https://www.youtube.com/watch?v=${activeVideo.videoId}` : null}
           captureError={null}
           isYouTubeMode={true}
           hasInteracted={hasInteracted}
           isPlaying={true}
+          connectRef={relayRef}
         />
       </div>
 
@@ -140,6 +143,8 @@ export default function SovereignPlayer({
   autoSubtitles = false,
   streamTier,
   youtubeChannel,
+  ytVideoId,
+  isVOD = false,
   children,
 }) {
   const videoRef = useRef(null);
@@ -325,6 +330,34 @@ export default function SovereignPlayer({
           streamTier={streamTier}
           hasInteracted={hasInteracted}
         />
+      ) : ytVideoId ? (
+        /* Atomic 16: VOD Direct Iframe — single YouTube video */
+        <div className="youtube-embed-wrap">
+          <div className="youtube-iframe-container">
+            <iframe
+              className="youtube-iframe"
+              src={`https://www.youtube.com/embed/${ytVideoId}?autoplay=1&rel=0&modestbranding=1`}
+              title="VOD Playback"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              allowFullScreen
+              frameBorder="0"
+            />
+            <SubtitleOverlay
+              key={`vod-sub-${ytVideoId}`}
+              streamId={streamId || "vod-relay"}
+              enabled={subtitlesEnabled}
+              onClose={() => setSubtitlesEnabled(false)}
+              autoEnable={autoSubtitles}
+              streamTier={streamTier}
+              streamUrl={`https://www.youtube.com/watch?v=${ytVideoId}`}
+              captureError={null}
+              isYouTubeMode={true}
+              hasInteracted={hasInteracted}
+              isPlaying={true}
+              connectRef={relayRef}
+            />
+          </div>
+        </div>
       ) : (
         <>
           <video

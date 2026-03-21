@@ -12,12 +12,15 @@ import { lightCandle, TAPER_AMOUNTS } from "@/lib/stewardship";
 export async function POST(request) {
     try {
         const body = await request.json();
-        const { streamId, amount, donorDid } = body;
+        const { streamId: rawStreamId, contentId, amount, donorDid } = body;
+
+        // Accept contentId as alias for streamId (VOD bridge)
+        const streamId = rawStreamId || contentId;
 
         // Validate required fields
         if (!streamId) {
             return NextResponse.json(
-                { success: false, error: "streamId is required" },
+                { success: false, error: "streamId or contentId is required" },
                 { status: 400 }
             );
         }

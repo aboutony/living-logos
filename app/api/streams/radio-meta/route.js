@@ -1,15 +1,18 @@
 /**
- * Directive 022: ICY Metadata Proxy
- * GET /api/streams/radio-meta?url=<icecast-url>
+ * Directive 022 + Atomic 05: Radio Metadata Bridge
+ * GET /api/streams/radio-meta
  *
- * Fetches the first chunk of an Icecast/Shoutcast stream,
- * extracts ICY metadata (StreamTitle), and returns it as JSON.
+ * Dual-source metadata endpoint:
+ *   1. source=pipe → Returns metadata from the Direct Pipe relay state
+ *                     (what yt-dlp is currently processing)
+ *   2. url=<icecast-url> → Original ICY metadata extraction from Icecast/Shoutcast
  *
- * Why server-side? Browsers cannot read ICY headers from <audio> elements
- * due to CORS restrictions on raw TCP Icecast framing.
+ * The Direct Pipe metadata is the bridge between the server-side
+ * yt-dlp audio extraction and the client-side radio player.
  */
 
 import { NextResponse } from "next/server";
+import { getRelayMetadata, getRelayState } from "@/lib/relay-state";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +23,6 @@ export const dynamic = "force-dynamic";
 function parseIcyMeta(buffer, metaint) {
     if (!metaint || metaint <= 0) return null;
 
-    // Find the metadata block after the first metaint-sized audio block
     const offset = metaint;
     if (offset >= buffer.length) return null;
 
@@ -31,12 +33,10 @@ function parseIcyMeta(buffer, metaint) {
         buffer.slice(offset + 1, offset + 1 + metaLength)
     );
 
-    // Parse StreamTitle='...' from the metadata string
     const match = metaStr.match(/StreamTitle='([^']*)'/i);
     if (!match) return { raw: metaStr, title: null, artist: null };
 
     const full = match[1].trim();
-    // Common format: "Artist - Title"  or just "Title"
     const parts = full.split(" - ");
     if (parts.length >= 2) {
         return {
@@ -50,17 +50,65 @@ function parseIcyMeta(buffer, metaint) {
 
 export async function GET(request) {
     const { searchParams } = new URL(request.url);
+    const source = searchParams.get("source");
     const streamUrl = searchParams.get("url");
 
+    // ═══════════════════════════════════════════════════════
+    // SOURCE: Direct Pipe — return relay state metadata
+    // ═══════════════════════════════════════════════════════
+    if (source === "pipe") {
+        const metadata = getRelayMetadata();
+        const state = getRelayState();
+
+        if (!metadata) {
+            return NextResponse.json({
+                success: true,
+                metadata: {
+                    title: "Sovereign Radio — Standby",
+                    artist: "The Living Logos",
+                    stationName: "The Living Logos — Sovereign Radio",
+                    genre: "Orthodox Christian",
+                    bitrate: null,
+                    contentType: null,
+                    raw: null,
+                    source: "direct-pipe",
+                    status: "idle",
+                },
+                relay: {
+                    isActive: false,
+                    uptimeMs: 0,
+                    history: state.history,
+                },
+            });
+        }
+
+        return NextResponse.json({
+            success: true,
+            metadata,
+            relay: {
+                isActive: state.isActive,
+                uptimeMs: state.uptimeMs,
+                history: state.history,
+            },
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SOURCE: ICY — original Icecast/Shoutcast metadata
+    // ═══════════════════════════════════════════════════════
     if (!streamUrl) {
+        // No source specified — return pipe metadata by default
+        const metadata = getRelayMetadata();
+        if (metadata) {
+            return NextResponse.json({ success: true, metadata });
+        }
         return NextResponse.json(
-            { success: false, error: "Missing 'url' parameter" },
+            { success: false, error: "Missing 'url' or 'source' parameter" },
             { status: 400 }
         );
     }
 
     try {
-        // Request the stream with ICY metadata enabled
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
 
@@ -74,7 +122,6 @@ export async function GET(request) {
         });
         clearTimeout(timeout);
 
-        // Get the metaint interval from ICY headers
         const metaint = parseInt(res.headers.get("icy-metaint") || "0", 10);
         const icyName = res.headers.get("icy-name") || null;
         const icyGenre = res.headers.get("icy-genre") || null;
@@ -82,7 +129,6 @@ export async function GET(request) {
         const contentType = res.headers.get("content-type") || "unknown";
 
         if (metaint <= 0) {
-            // No ICY metadata available — return station info from headers only
             return NextResponse.json({
                 success: true,
                 metadata: {
@@ -93,15 +139,15 @@ export async function GET(request) {
                     bitrate: icyBr,
                     contentType,
                     raw: null,
+                    source: "icy",
                 },
             });
         }
 
-        // Read enough bytes to get the first metadata block
         const reader = res.body.getReader();
         const chunks = [];
         let totalBytes = 0;
-        const targetBytes = metaint + 4096; // metaint + room for metadata
+        const targetBytes = metaint + 4096;
 
         while (totalBytes < targetBytes) {
             const { done, value } = await reader.read();
@@ -109,11 +155,8 @@ export async function GET(request) {
             chunks.push(value);
             totalBytes += value.length;
         }
+        reader.cancel().catch(() => {});
 
-        // Cancel the stream — we only needed the first metadata block
-        reader.cancel().catch(() => { });
-
-        // Concatenate chunks
         const fullBuffer = new Uint8Array(totalBytes);
         let pos = 0;
         for (const chunk of chunks) {
@@ -121,7 +164,6 @@ export async function GET(request) {
             pos += chunk.length;
         }
 
-        // Parse ICY metadata
         const parsed = parseIcyMeta(fullBuffer, metaint);
 
         return NextResponse.json({
@@ -134,10 +176,10 @@ export async function GET(request) {
                 bitrate: icyBr,
                 contentType,
                 raw: parsed?.raw || null,
+                source: "icy",
             },
         });
     } catch (err) {
-        // If stream doesn't support ICY, return a graceful fallback
         return NextResponse.json({
             success: true,
             metadata: {
@@ -150,6 +192,7 @@ export async function GET(request) {
                 raw: null,
                 fallback: true,
                 error: err.message,
+                source: "icy-fallback",
             },
         });
     }

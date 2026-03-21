@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server";
-import { spawn } from "child_process";
 import { sanitizeTheologicalOutput, detectSacredTerms, SUPPORTED_LANGUAGES } from "@/lib/patristic-ai";
+import { resolveAudioUrl, spawnAudioPipe } from "@/lib/audio-pipe";
+import { setActiveRelay, clearActiveRelay } from "@/lib/relay-state";
 
 /**
  * GET /api/ai/transcribe/stream
  *
- * Atomic 04.6: Server-Side Stream Interception (SSE)
+ * Atomic 12.2: Direct Audio Pipe (SSE)
  *
- * Uses ffmpeg to pipe audio from a streamUrl in 3-second segments,
- * feeds each segment to Whisper-1, and streams vetted translations
- * back to the client via Server-Sent Events.
+ * 1. Resolves the stream URL via yt-dlp (if YouTube) or passes through directly
+ * 2. Spawns ffmpeg to pipe audio as raw PCM s16le mono 16kHz
+ * 3. Segments into 3-second chunks, sends each to Whisper-1
+ * 4. Translates via GPT-4o-mini with Sacred Glossary enforcement
+ * 5. Streams vetted translations back via Server-Sent Events
  *
  * Query params:
- *   streamUrl  - The media URL to extract audio from (HLS, MP4, etc.)
+ *   streamUrl  - The media URL (YouTube, HLS, MP4, etc.)
  *   sourceLang - Source language code (default: "el")
  *   targetLang - Target language code (default: "en")
  *   streamId   - Stream identifier for logging
@@ -156,24 +159,40 @@ export async function GET(request) {
     let ffmpegProcess = null;
 
     const stream = new ReadableStream({
-        start(controller) {
+        async start(controller) {
             const sendSSE = (data) => {
                 try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
             };
 
-            sendSSE({ type: "status", message: "📡 LIVE — Server audio relay active" });
+            sendSSE({ type: "status", message: "📡 LIVE — Resolving audio stream..." });
+
+            // ── Atomic 12.2: Resolve URL via yt-dlp (if YouTube) ──
+            let resolvedUrl;
+            try {
+                const result = await resolveAudioUrl(streamUrl);
+                resolvedUrl = result.url;
+                console.log(`[stream] Audio resolved via ${result.source}: ${resolvedUrl.substring(0, 80)}`);
+                sendSSE({ type: "status", message: `📡 LIVE — Direct pipe active (${result.source})` });
+
+                // Atomic 05: Update relay state for radio metadata bridge
+                setActiveRelay({
+                    streamId: streamId || "unknown",
+                    title: streamId?.startsWith("vod-") ? "VOD Relay" : "Live Stream",
+                    artist: "The Living Logos",
+                    streamUrl,
+                    type: streamId?.startsWith("vod-") ? "vod" : "live",
+                    language: sourceLang,
+                });
+            } catch (err) {
+                console.error("[stream] URL resolution failed:", err.message);
+                sendSSE({ type: "error", message: `Audio resolution failed: ${err.message}` });
+                try { controller.close(); } catch {}
+                return;
+            }
 
             try {
-                // Spawn ffmpeg: extract audio as raw PCM s16le, mono, 16kHz
-                ffmpegProcess = spawn("ffmpeg", [
-                    "-i", streamUrl,
-                    "-vn",            // No video
-                    "-ac", "1",       // Mono
-                    "-ar", "16000",   // 16kHz sample rate
-                    "-f", "s16le",    // Raw PCM signed 16-bit little-endian
-                    "-loglevel", "error",
-                    "pipe:1",         // Output to stdout
-                ]);
+                // ── Atomic 12.2: Spawn ffmpeg via audio-pipe with reconnect ──
+                ffmpegProcess = spawnAudioPipe(resolvedUrl);
 
                 let pcmBuffer = Buffer.alloc(0);
                 const CHUNK_SIZE = 16000 * 2 * 3; // 3 seconds of 16-bit mono @ 16kHz = 96,000 bytes
@@ -227,7 +246,7 @@ export async function GET(request) {
                         cue: { id: Date.now(), duration: result.duration || 3 },
                         rms,
                         engine: "OpenAI Whisper-1",
-                        relay: "server-ffmpeg",
+                        relay: "direct-pipe",
                     });
                 }
 
@@ -252,6 +271,7 @@ export async function GET(request) {
                 });
 
                 ffmpegProcess.on("close", (code) => {
+                    clearActiveRelay(); // Atomic 05: Clear relay state
                     sendSSE({ type: "status", message: `Stream ended (exit: ${code})` });
                     try { controller.close(); } catch {}
                 });
@@ -261,11 +281,12 @@ export async function GET(request) {
                     try { controller.close(); } catch {}
                 });
             } catch (err) {
-                sendSSE({ type: "error", message: `Stream relay failed: ${err.message}` });
+                sendSSE({ type: "error", message: `Direct pipe failed: ${err.message}` });
                 try { controller.close(); } catch {}
             }
         },
         cancel() {
+            clearActiveRelay(); // Atomic 05: Clear relay state on cancel
             if (ffmpegProcess) {
                 try { ffmpegProcess.kill("SIGTERM"); } catch {}
                 ffmpegProcess = null;

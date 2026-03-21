@@ -18,19 +18,22 @@ import { generateDID, updateDIDProfile } from "@/lib/ssi";
 
 const BOTTOM_TABS = [
     { href: "/", label: "Map", Icon: Globe },
-    { href: "/watch", label: "Live", Icon: Radio },
+    { href: "/watch?id=stream-morphou-001", label: "Live", Icon: Radio },
     { href: "/schedule", label: "Schedule", Icon: CalendarDays },
     { href: "/wallet", label: "Wallet", Icon: Wallet },
 ];
 
 const DRAWER_LINKS = [
     { href: "/", label: "Global Map", icon: "🌍" },
-    { href: "/watch", label: "Live Now", icon: "📡" },
+    { href: "/watch?id=stream-morphou-001", label: "Live Now", icon: "📡" },
     { href: "/newsroom", label: "Newsroom", icon: "🎙️" },
     { href: "/broadcaster", label: "Broadcaster", icon: "📊" },
     { href: "/schedule", label: "Schedule", icon: "📅" },
     { href: "/wallet", label: "Wallet", icon: "🔐" },
     { href: "/library", label: "Library", icon: "📚" },
+    { href: "/library?category=sermons", label: "Sermons", icon: "🎙️" },
+    { href: "/library?category=documentaries", label: "Documentaries", icon: "🎬" },
+    { href: "/library?category=movies", label: "Movies", icon: "🎞️" },
 ];
 
 export default function ClientShell({ children }) {

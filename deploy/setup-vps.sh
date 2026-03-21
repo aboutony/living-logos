@@ -1,7 +1,7 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════
 # The Living Logos — Hostinger VPS Setup Script
-# Atomic Command 09: Sovereign Infrastructure
+# Atomic Command 12.2: Direct Audio Pipe
 # Target: Ubuntu 24.04 LTS
 # ═══════════════════════════════════════════════════════
 
@@ -9,7 +9,7 @@ set -e
 
 echo "╔═══════════════════════════════════════════════╗"
 echo "║  The Living Logos — VPS Provisioning           ║"
-echo "║  Atomic Command 09: Sovereign Infrastructure   ║"
+echo "║  Atomic Command 12.2: Direct Audio Pipe        ║"
 echo "╚═══════════════════════════════════════════════╝"
 echo ""
 
@@ -21,9 +21,11 @@ sudo apt update && sudo apt upgrade -y
 echo "► Step 2: Installing ffmpeg, python3-pip, curl, git..."
 sudo apt install -y ffmpeg python3-pip curl git build-essential
 
-# ─── 3. Install yt-dlp ───
-echo "► Step 3: Installing yt-dlp..."
-sudo pip3 install --break-system-packages yt-dlp
+# ─── 3. Install yt-dlp (nightly/pre-release for latest throttle fixes) ───
+echo "► Step 3: Installing yt-dlp nightly..."
+sudo pip3 install --break-system-packages yt-dlp --pre
+# Force update to absolute latest
+sudo yt-dlp -U 2>/dev/null || true
 # Verify
 echo "  ✓ yt-dlp version: $(yt-dlp --version)"
 echo "  ✓ ffmpeg version: $(ffmpeg -version 2>&1 | head -1)"

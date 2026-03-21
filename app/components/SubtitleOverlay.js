@@ -83,7 +83,7 @@ export default function SubtitleOverlay({
     const [cueQueue, setCueQueue] = useState([]);
     const [sacredTermCount, setSacredTermCount] = useState(0);
     const [vetted, setVetted] = useState(false);
-    const [statusText, setStatusText] = useState("📡 Shadow Player ready");
+    const [statusText, setStatusText] = useState("Ready");
 
     const eventSourceRef = useRef(null);
     const sourceLangRef = useRef(sourceLang);
@@ -125,7 +125,7 @@ export default function SubtitleOverlay({
 
         // Immediately set SOVEREIGN — no "Connecting..." state possible
         setIsProcessing(true);
-        setStatusText("📡 SOVEREIGN — Shadow rendering active");
+        setStatusText("📡 LIVE");
 
         es.onmessage = (event) => {
             try {
@@ -149,7 +149,7 @@ export default function SubtitleOverlay({
                         };
 
                         setCueQueue(prev => [...prev.slice(-2), newCue]);
-                        setStatusText("📡 SOVEREIGN — Live transcription");
+                        setStatusText("📡 LIVE");
 
                         if (data.sacredTerms?.length > 0) {
                             setSacredTermCount(data.sacredTerms.length);
@@ -182,7 +182,7 @@ export default function SubtitleOverlay({
         es.onerror = () => {
             console.warn("[SubtitleOverlay] Shadow SSE error/closed");
             setIsProcessing(false);
-            setStatusText("📡 Reconnecting to Shadow Player…");
+            setStatusText("📡 Reconnecting…");
         };
     }, [streamUrl, streamId]);
 
@@ -212,7 +212,7 @@ export default function SubtitleOverlay({
             disconnectRelay();
             if (enabled) {
                 setCueQueue([]);
-                setStatusText("⏸ Paused — Shadow Player idle");
+                setStatusText("⏸ Paused");
             }
         }
     }, [isPlaying, enabled, disconnectRelay]);
@@ -251,10 +251,10 @@ export default function SubtitleOverlay({
                 <div className="subtitle-header">
                     <div
                         className={`subtitle-stream-indicator ${isProcessing ? "active" : ""}`}
-                        title={isProcessing ? "Shadow Player active" : "Waiting for interaction"}
+                        title={isProcessing ? "Direct Pipe active" : "Waiting for interaction"}
                     >
                         <span className="subtitle-stream-icon">{isProcessing ? "📡" : "⏳"}</span>
-                        <span className="subtitle-stream-label">{isProcessing ? "SOVEREIGN" : "READY"}</span>
+                        <span className="subtitle-stream-label">{isProcessing ? "LIVE" : "READY"}</span>
                     </div>
 
                     <div className="subtitle-lang-selector">
@@ -293,7 +293,7 @@ export default function SubtitleOverlay({
                     )}
                     <div className="glossary-lock-badge"><span>🔒</span></div>
                     {streamTier && <div className={`subtitle-tier-badge tier-${streamTier}`}>T{streamTier}</div>}
-                    <div className="subtitle-no-mic-badge" title="Shadow Player — server-side audio extraction">🚫🎙️</div>
+                    <div className="subtitle-no-mic-badge" title="Direct Pipe — server-side audio extraction">🚫🎙️</div>
                     <button className="subtitle-close" onClick={onClose} aria-label="Close subtitles">✕</button>
                 </div>
 
@@ -326,7 +326,7 @@ export default function SubtitleOverlay({
 
                 {/* Sovereignty Badge */}
                 <div className="subtitle-sovereignty-badge">
-                    <span>🛡️ Shadow Player — Server-Side Audio Extraction</span>
+                    <span>📡 Direct Pipe — Server-Side Audio</span>
                 </div>
             </div>
 

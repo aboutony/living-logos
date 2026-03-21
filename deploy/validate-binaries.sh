@@ -1,7 +1,8 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════
-# Binary Validation Script — Atomic 09
+# Binary Validation Script — Atomic 12.2
 # Ensures spawn("ffmpeg") and spawn("yt-dlp") resolve
+# yt-dlp must be nightly/pre-release for YouTube throttle fixes
 # ═══════════════════════════════════════════════════════
 
 echo "═══ Binary Validation — Living Logos Sovereign Relay ═══"
@@ -23,8 +24,9 @@ echo ""
 if command -v yt-dlp &> /dev/null; then
     echo "✅ yt-dlp:   $(which yt-dlp)"
     echo "   Version: $(yt-dlp --version)"
+    echo "   ℹ️  Ensure this is a nightly/pre-release build (pip install yt-dlp --pre)"
 else
-    echo "❌ yt-dlp:   NOT FOUND — run: pip3 install yt-dlp"
+    echo "❌ yt-dlp:   NOT FOUND — run: pip3 install yt-dlp --pre"
     PASS=false
 fi
 echo ""
