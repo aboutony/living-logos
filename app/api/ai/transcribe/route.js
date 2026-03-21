@@ -183,6 +183,10 @@ export async function POST(request) {
             format: format || "webm",
             sanitized: true,
             mode: "hardware-locked",
+        }, {
+            headers: {
+                'X-Accel-Buffering': 'no',
+            },
         });
     } catch (err) {
         return NextResponse.json(
