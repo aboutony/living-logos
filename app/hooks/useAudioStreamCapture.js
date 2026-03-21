@@ -27,45 +27,24 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
     const connectedRef = useRef(false);
     const pendingStartRef = useRef(false);
 
-    // ─── Atomic 04.1: Gesture-Locked Initialization ───
-    // AudioContext is created suspended. Only resume() + createMediaElementSource()
-    // happen AFTER a user gesture, ensuring no "Connecting..." hang.
-    const startCapture = useCallback(async () => {
+    // ─── Atomic 04.3: Synchronous Gesture-First Handler ───
+    // NON-ASYNC wrapper ensures audioCtx.resume() is called as the
+    // VERY FIRST synchronous operation inside the user gesture callstack.
+    // A 0.1s silent buffer "primes" the browser before async capture begins.
+
+    /**
+     * _asyncCaptureWork — The deferred async portion.
+     * Only called AFTER resume() + silent buffer have already run synchronously.
+     */
+    const _asyncCaptureWork = useCallback(async (ctx) => {
         const el = mediaElementRef?.current;
         if (!el) {
             pendingStartRef.current = true;
             return;
         }
 
-        // Prevent double-creation of MediaElementSource
-        if (connectedRef.current && captureStream) {
-            setIsCapturing(true);
-            return;
-        }
-
         try {
-            // Step 1: Create AudioContext (starts suspended per browser policy)
-            if (!audioCtxRef.current) {
-                const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                audioCtxRef.current = new AudioCtx();
-            }
-            const ctx = audioCtxRef.current;
-
-            // Step 2: The Sacred Handshake — await resume() inside user gesture
-            if (ctx.state === "suspended") {
-                try {
-                    await ctx.resume();
-                    console.log("[AudioStreamCapture] AudioContext resumed via gesture");
-                } catch {
-                    setNeedsInteraction(true);
-                    setError("Ready \u2014 Tap to Start");
-                    pendingStartRef.current = true;
-                    console.warn("[AudioStreamCapture] resume failed \u2014 needs gesture");
-                    return;
-                }
-            }
-
-            // Step 3: Guard — context must be running before tap
+            // Guard — context must be running after the synchronous prime
             if (ctx.state !== "running") {
                 setNeedsInteraction(true);
                 setError("Ready \u2014 Tap to Start");
@@ -73,7 +52,7 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
                 return;
             }
 
-            // Step 4: The Internal Tap — only after context is running
+            // The Internal Tap — only after context is confirmed running
             if (!sourceNodeRef.current) {
                 sourceNodeRef.current = ctx.createMediaElementSource(el);
                 connectedRef.current = true;
@@ -104,7 +83,65 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
             setError("Ready \u2014 Tap to Start");
             setIsCapturing(false);
         }
-    }, [mediaElementRef, captureStream]);
+    }, [mediaElementRef]);
+
+    /**
+     * startCapture — Atomic 04.3: Synchronous "Gesture-First" Handler
+     *
+     * Step 1 (Immediate): audioCtx.resume() — MUST be the first line.
+     * Step 2 (Immediate): Play a 0.1s silent buffer to prime the browser.
+     * Step 3 (Deferred):  Only then kick off async _asyncCaptureWork().
+     */
+    const startCapture = useCallback(() => {
+        const el = mediaElementRef?.current;
+        if (!el) {
+            pendingStartRef.current = true;
+            return;
+        }
+
+        // Prevent double-creation of MediaElementSource
+        if (connectedRef.current && captureStream) {
+            setIsCapturing(true);
+            return;
+        }
+
+        // ── Step 0: Ensure AudioContext exists ──
+        if (!audioCtxRef.current) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            audioCtxRef.current = new AudioCtx();
+        }
+        const ctx = audioCtxRef.current;
+
+        // ── Step 1 (IMMEDIATE): Resume — MUST be synchronous, first call ──
+        const resumePromise = ctx.resume();
+        console.log("[AudioStreamCapture] 04.3 — audioCtx.resume() fired (synchronous gesture callstack)");
+
+        // ── Step 2 (IMMEDIATE): Play 0.1s silent buffer to "prime" the browser ──
+        try {
+            const silentBuffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.1), ctx.sampleRate);
+            const silentSource = ctx.createBufferSource();
+            silentSource.buffer = silentBuffer;
+            silentSource.connect(ctx.destination);
+            silentSource.start(0);
+            silentSource.onended = () => { try { silentSource.disconnect(); } catch {} };
+            console.log("[AudioStreamCapture] 04.3 — Silent buffer primed (0.1s)");
+        } catch (primeErr) {
+            console.warn("[AudioStreamCapture] 04.3 — Silent buffer prime failed:", primeErr);
+        }
+
+        // ── Step 3 (DEFERRED): Async capture ONLY after resume resolves ──
+        resumePromise
+            .then(() => {
+                console.log("[AudioStreamCapture] 04.3 — AudioContext confirmed running, starting capture");
+                return _asyncCaptureWork(ctx);
+            })
+            .catch(() => {
+                setNeedsInteraction(true);
+                setError("Ready \u2014 Tap to Start");
+                pendingStartRef.current = true;
+                console.warn("[AudioStreamCapture] 04.3 — resume() rejected \u2014 needs gesture");
+            });
+    }, [mediaElementRef, captureStream, _asyncCaptureWork]);
 
     // ─── Atomic 01.1: Explicit stream disposal ───
     const cleanupAudio = useCallback(() => {

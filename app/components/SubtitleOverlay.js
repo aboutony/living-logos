@@ -349,10 +349,16 @@ export default function SubtitleOverlay({
     // Atomic 04: startTabRecorderProcessing & handleYouTubeCapture DELETED
     // All capture now uses internal AudioNode tap via useAudioStreamCapture
 
-    // ─── Directive 018 + Atomic 04: Hardware-lock to video play state ───
+    // ─── Directive 018 + Atomic 04.3: Hardware-lock to video play state ───
     // Unified path — both YouTube and non-YouTube use internal AudioNode tap
+    // Atomic 04.3: AbortController prevents server-side stream destruction crash
     useEffect(() => {
         if (!enabled) return;
+
+        // Atomic 04.3: AbortController for memory management —
+        // prevents "Cannot call write on destroyed stream" crash
+        const controller = new AbortController();
+        const { signal } = controller;
 
         if (!isPlaying) {
             // VIDEO PAUSED → instant idle + clear
@@ -360,18 +366,24 @@ export default function SubtitleOverlay({
             setCueQueue([]);
             setSceneDesc("");
             setStatusText("⏸ Paused — Subtitle engine idle");
-            return;
+            return () => { controller.abort(); };
         }
 
         // VIDEO PLAYING → attempt to start recorder via internal tap
-        if (!hasInteracted) return;
+        if (!hasInteracted) return () => { controller.abort(); };
 
         if (mediaStream) {
-            const timer = setTimeout(() => startRecorderProcessing(), 300);
-            return () => clearTimeout(timer);
+            const timer = setTimeout(() => {
+                if (!signal.aborted) startRecorderProcessing();
+            }, 300);
+            return () => {
+                controller.abort();
+                clearTimeout(timer);
+            };
         } else {
-            onStartCapture?.();
+            if (!signal.aborted) onStartCapture?.();
             setStatusText("📡 Connecting to internal audio buffer…");
+            return () => { controller.abort(); };
         }
     }, [enabled, isPlaying, hasInteracted, mediaStream, startRecorderProcessing, onStartCapture, stopProcessing]);
 
