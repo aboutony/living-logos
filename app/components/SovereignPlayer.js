@@ -160,16 +160,16 @@ export default function SovereignPlayer({
   // ─── Directive 012: Global Interaction Listener ───
   const { hasInteracted } = useUserInteraction();
 
-  // ─── Directive 011: Internal Audio Capture ───
+  // ─── Directive 011 + Atomic 04.5: Internal Audio Capture (ScriptProcessor PCM Tap) ───
   const {
-    captureStream,
     isCapturing,
     error: captureError,
     needsInteraction,
     startCapture,
     stopCapture,
     cleanupAudio,
-    audioCtxRef, // Atomic 04.4: Direct access for synchronous resume()
+    audioCtxRef,
+    flushAudioBuffer, // Atomic 04.5: Returns accumulated PCM Float32Array
   } = useAudioStreamCapture(videoRef, hasInteracted);
 
   // ─── Directive 012: Auto-enable subtitles once user interacts ───
@@ -397,7 +397,7 @@ export default function SovereignPlayer({
 
       {children}
 
-      {/* Patristic AI Subtitle Overlay — Directives 011+012+017+018 */}
+      {/* Patristic AI Subtitle Overlay — Directives 011+012+017+018 + Atomic 04.5 */}
       {!youtubeChannel && (
         <SubtitleOverlay
           key={`sub-${subtitleKey}`}
@@ -406,7 +406,8 @@ export default function SovereignPlayer({
           onClose={() => setSubtitlesEnabled(false)}
           autoEnable={autoSubtitles}
           streamTier={streamTier}
-          mediaStream={captureStream}
+          flushAudioBuffer={flushAudioBuffer}
+          isCapturing={isCapturing}
           captureError={captureError}
           onStartCapture={startCapture}
           isYouTubeMode={false}

@@ -127,7 +127,7 @@ export async function POST(request) {
         // D018: Hard gate — reject trivial/simulated data
         if (audioData.length < 100) {
             return NextResponse.json(
-                { success: false, error: "Audio data too small. Send real 3-second MediaRecorder chunks." },
+                { success: false, error: "Audio data too small. Send real 3-second PCM audio chunks." },
                 { status: 400 }
             );
         }

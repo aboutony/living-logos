@@ -64,7 +64,8 @@ export default function SubtitleOverlay({
     onClose,
     autoEnable,
     streamTier,
-    mediaStream,
+    flushAudioBuffer,  // Atomic 04.5: PCM buffer flush function
+    isCapturing,       // Atomic 04.5: Whether ScriptProcessor is active
     captureError,
     onStartCapture,
     isYouTubeMode,
@@ -82,7 +83,7 @@ export default function SubtitleOverlay({
     const [sceneDesc, setSceneDesc] = useState("");
 
     const processingRef = useRef(false);
-    const recorderRef = useRef(null);
+    // Atomic 04.5: recorderRef REMOVED — no more MediaRecorder
     const translateTimeout = useRef(null);
     const periodicTimerRef = useRef(null);
     const sourceLangRef = useRef(sourceLang);
@@ -164,49 +165,81 @@ export default function SubtitleOverlay({
     const silenceFadeTimerRef = useRef(null);
 
     /**
-     * Atomic 03: Compute RMS (Root Mean Square) energy of an audio blob.
-     * Decodes the blob into PCM float samples and calculates volume level.
-     * Returns a value between 0 (silence) and 1 (max volume).
+     * Atomic 04.5: Encode Float32Array PCM → WAV → base64
+     * Creates a valid WAV file from raw PCM samples for Whisper API.
      */
-    const computeRMS = useCallback(async (audioBlob) => {
-        try {
-            const arrayBuffer = await audioBlob.arrayBuffer();
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            const offlineCtx = new AudioCtx();
-            const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
-            const samples = audioBuffer.getChannelData(0);
-            let sumSquares = 0;
-            for (let i = 0; i < samples.length; i++) {
-                sumSquares += samples[i] * samples[i];
-            }
-            offlineCtx.close().catch(() => {});
-            return Math.sqrt(sumSquares / samples.length);
-        } catch {
-            // If decoding fails, assume speech to avoid false silencing
-            return 1;
+    const pcmToWavBase64 = useCallback((samples, sampleRate) => {
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+        const blockAlign = numChannels * (bitsPerSample / 8);
+        const dataSize = samples.length * (bitsPerSample / 8);
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
+
+        // WAV header
+        const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);           // fmt chunk size
+        view.setUint16(20, 1, true);            // PCM format
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitsPerSample, true);
+        writeStr(36, 'data');
+        view.setUint32(40, dataSize, true);
+
+        // Convert Float32 → Int16 PCM
+        let offset = 44;
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            offset += 2;
         }
+
+        // Convert to base64
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
     }, []);
 
-    // ─── Directive 018: Transcribe ONLY with real audio data ───
+    /**
+     * Atomic 04.5: Compute RMS directly on Float32Array PCM samples.
+     * No AudioContext decoding needed — samples are already raw PCM.
+     */
+    const computeRMSFromPCM = useCallback((samples) => {
+        if (!samples || samples.length === 0) return 0;
+        let sumSquares = 0;
+        for (let i = 0; i < samples.length; i++) {
+            sumSquares += samples[i] * samples[i];
+        }
+        return Math.sqrt(sumSquares / samples.length);
+    }, []);
+
+    // ─── Atomic 04.5 + Directive 018: Transcribe from raw PCM Float32 ───
     // ─── Atomic 02: Any-to-Any relay — sends targetLang for single round-trip ───
     // ─── Atomic 03: VAD gate — skip POST if silence detected ───
-    const transcribeAndTranslate = useCallback(async (audioBlob) => {
-        // D018: Hard requirement — no audio blob = no transcription
-        if (!audioBlob || audioBlob.size === 0) return;
+    const transcribeAndTranslatePCM = useCallback(async (pcmData) => {
+        // D018: Hard requirement — no PCM data = no transcription
+        if (!pcmData || !pcmData.samples || pcmData.samples.length === 0) return;
 
-        // Atomic 03: VAD — compute RMS volume of this chunk
-        const rms = await computeRMS(audioBlob);
+        // Atomic 03: VAD — compute RMS directly on PCM samples
+        const rms = computeRMSFromPCM(pcmData.samples);
         if (rms < VAD_SILENCE_THRESHOLD) {
             silenceStreakRef.current++;
             console.log(`[VAD] Skipped (Silence) — RMS: ${rms.toFixed(4)}, streak: ${silenceStreakRef.current}`);
 
             // Atomic 03: Subtitle persistence — keep last cue for 5s then fade
             if (silenceStreakRef.current === 1) {
-                // First silent chunk after speech — start 5s persistence timer
                 if (silenceFadeTimerRef.current) clearTimeout(silenceFadeTimerRef.current);
                 silenceFadeTimerRef.current = setTimeout(() => {
                     setCueQueue([]);
-                    setStatusText("📡 Listening… (silence detected)");
+                    setStatusText("\ud83d\udce1 Listening\u2026 (silence detected)");
                     silenceFadeTimerRef.current = null;
                 }, 5000);
             }
@@ -222,19 +255,15 @@ export default function SubtitleOverlay({
         console.log(`[VAD] Sent (Speech) — RMS: ${rms.toFixed(4)}`);
 
         try {
-            const reader = new FileReader();
-            const base64Promise = new Promise((resolve) => {
-                reader.onloadend = () => resolve(reader.result.split(",")[1]);
-                reader.readAsDataURL(audioBlob);
-            });
-            const audioData = await base64Promise;
+            // Atomic 04.5: Convert Float32 PCM → WAV → base64
+            const audioData = pcmToWavBase64(pcmData.samples, pcmData.sampleRate);
 
             const res = await fetch("/api/ai/transcribe", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     audioData,
-                    format: "webm",
+                    format: "wav",
                     sourceLang: sourceLangRef.current,
                     targetLang: targetLangRef.current,
                     streamId,
@@ -257,7 +286,7 @@ export default function SubtitleOverlay({
                         timestamp: Date.now(),
                     };
                     setCueQueue(prev => [...prev.slice(-2), newCue]);
-                    setStatusText("📡 Live — Any-to-Any relay active");
+                    setStatusText("\ud83d\udce1 Live \u2014 Any-to-Any relay active");
                     // Auto-expire this cue after 10 seconds
                     setTimeout(() => {
                         setCueQueue(prev => prev.filter(c => c.id !== cueId));
@@ -273,90 +302,44 @@ export default function SubtitleOverlay({
         } catch (err) {
             console.error("[SubtitleOverlay] Transcription failed:", err);
         }
-    }, [streamId, processTranscriptionCue]);
+    }, [streamId, processTranscriptionCue, pcmToWavBase64, computeRMSFromPCM]);
 
-    // ─── Start MediaRecorder (ONLY path — real audio or nothing) ───
-    const startRecorderProcessing = useCallback(() => {
-        if (!mediaStream || processingRef.current) return;
-        // Atomic 01.1: Verify stream is alive before creating MediaRecorder
-        const tracks = mediaStream.getTracks();
-        if (tracks.length === 0 || tracks.every(t => t.readyState === 'ended')) {
-            console.warn("[SubtitleOverlay] Stream ended/destroyed — skipping recorder start");
-            return;
-        }
-        try {
-            const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-                ? "audio/webm;codecs=opus" : "audio/webm";
-            const recorder = new MediaRecorder(mediaStream, { mimeType, audioBitsPerSecond: 16000 });
-            recorder.ondataavailable = (event) => {
-                if (event.data && event.data.size > 0) transcribeAndTranslate(event.data);
-            };
-            // Restart recording after each stop to produce complete valid files
-            recorder.onstop = () => {
-                // Atomic 01.1: Verify stream is still alive before restarting
-                if (processingRef.current && recorderRef.current) {
-                    const currentTracks = mediaStream.getTracks();
-                    if (currentTracks.length === 0 || currentTracks.every(t => t.readyState === 'ended')) {
-                        console.warn("[SubtitleOverlay] Stream ended during recording cycle — stopping");
-                        processingRef.current = false;
-                        setIsProcessing(false);
-                        return;
-                    }
-                    try { recorderRef.current.start(); } catch { }
-                }
-            };
-            recorder.start(); // No timeslice — stop/start cycle produces valid files
-            recorderRef.current = recorder;
-            processingRef.current = true;
-            setIsProcessing(true);
-            setStatusText("📡 Live — Whisper STT processing audio");
-            // Stop every 3s → ondataavailable with complete WebM → onstop → restart
-            periodicTimerRef.current = setInterval(() => {
-                if (recorderRef.current && recorderRef.current.state === "recording") {
-                    // Atomic 01.1: Check stream validity before stopping
-                    const liveTracks = mediaStream.getTracks();
-                    if (liveTracks.length === 0 || liveTracks.every(t => t.readyState === 'ended')) {
-                        clearInterval(periodicTimerRef.current);
-                        periodicTimerRef.current = null;
-                        processingRef.current = false;
-                        setIsProcessing(false);
-                        return;
-                    }
-                    recorderRef.current.stop();
-                }
-            }, 3000);
-        } catch (err) {
-            console.error("[SubtitleOverlay] MediaRecorder error:", err);
-        }
-    }, [mediaStream, transcribeAndTranslate]);
+    // ─── Atomic 04.5: Start PCM Polling (replaces MediaRecorder) ───
+    // Every 3 seconds, flush the PCM buffer and send to Whisper API.
+    // Zero MediaRecorder. Zero browser popups.
+    const startPCMProcessing = useCallback(() => {
+        if (processingRef.current) return;
+        processingRef.current = true;
+        setIsProcessing(true);
+        setStatusText("\ud83d\udce1 Live \u2014 Whisper STT processing audio");
+        console.log("[SubtitleOverlay] 04.5 \u2014 PCM polling started (3s interval)");
 
-    // D018: PURGED — startPeriodicProcessing DELETED (was the simulation loop)
+        periodicTimerRef.current = setInterval(() => {
+            if (!processingRef.current || !flushAudioBuffer) return;
+            const pcmData = flushAudioBuffer();
+            if (pcmData) {
+                transcribeAndTranslatePCM(pcmData);
+            }
+        }, 3000);
+    }, [flushAudioBuffer, transcribeAndTranslatePCM]);
 
     // ─── Stop all processing ───
     const stopProcessing = useCallback(() => {
         processingRef.current = false;
         setIsProcessing(false);
-        if (recorderRef.current && recorderRef.current.state !== "inactive") {
-            try { recorderRef.current.stop(); } catch { }
-        }
-        recorderRef.current = null;
+        // Atomic 04.5: No MediaRecorder to stop — just clear the interval
         if (periodicTimerRef.current) {
             clearInterval(periodicTimerRef.current);
             periodicTimerRef.current = null;
         }
     }, []);
 
-    // Atomic 04: startTabRecorderProcessing & handleYouTubeCapture DELETED
-    // All capture now uses internal AudioNode tap via useAudioStreamCapture
-
-    // ─── Directive 018 + Atomic 04.3: Hardware-lock to video play state ───
-    // Unified path — both YouTube and non-YouTube use internal AudioNode tap
-    // Atomic 04.3: AbortController prevents server-side stream destruction crash
+    // ─── Directive 018 + Atomic 04.5: Hardware-lock to video play state ───
+    // Uses isCapturing (ScriptProcessor active) instead of mediaStream
+    // AbortController prevents stale callbacks
     useEffect(() => {
         if (!enabled) return;
 
-        // Atomic 04.3: AbortController for memory management —
-        // prevents "Cannot call write on destroyed stream" crash
         const controller = new AbortController();
         const { signal } = controller;
 
@@ -365,16 +348,17 @@ export default function SubtitleOverlay({
             stopProcessing();
             setCueQueue([]);
             setSceneDesc("");
-            setStatusText("⏸ Paused — Subtitle engine idle");
+            setStatusText("\u23f8 Paused \u2014 Subtitle engine idle");
             return () => { controller.abort(); };
         }
 
-        // VIDEO PLAYING → attempt to start recorder via internal tap
+        // VIDEO PLAYING → attempt to start PCM polling via ScriptProcessor tap
         if (!hasInteracted) return () => { controller.abort(); };
 
-        if (mediaStream) {
+        if (isCapturing) {
+            // Atomic 04.5: ScriptProcessor is active — start PCM polling
             const timer = setTimeout(() => {
-                if (!signal.aborted) startRecorderProcessing();
+                if (!signal.aborted) startPCMProcessing();
             }, 300);
             return () => {
                 controller.abort();
@@ -382,10 +366,10 @@ export default function SubtitleOverlay({
             };
         } else {
             if (!signal.aborted) onStartCapture?.();
-            setStatusText("📡 Connecting to internal audio buffer…");
+            setStatusText("\ud83d\udce1 Connecting to internal audio buffer\u2026");
             return () => { controller.abort(); };
         }
-    }, [enabled, isPlaying, hasInteracted, mediaStream, startRecorderProcessing, onStartCapture, stopProcessing]);
+    }, [enabled, isPlaying, hasInteracted, isCapturing, startPCMProcessing, onStartCapture, stopProcessing]);
 
     // ─── Stop when disabled ───
     useEffect(() => { if (!enabled) stopProcessing(); }, [enabled, stopProcessing]);
@@ -394,14 +378,11 @@ export default function SubtitleOverlay({
     useEffect(() => {
         return () => {
             processingRef.current = false;
-            if (recorderRef.current && recorderRef.current.state !== "inactive") {
-                try { recorderRef.current.stop(); } catch { }
-            }
+            // Atomic 04.5: No MediaRecorder to stop
             clearTimeout(translateTimeout.current);
             clearTimeout(cueTimerRef.current);
             clearTimeout(silenceFadeTimerRef.current); // Atomic 03
             if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
-            // Atomic 04: tabStreamRef cleanup REMOVED — no more getDisplayMedia
         };
     }, []);
 

@@ -5,36 +5,62 @@ import { useRef, useState, useEffect, useCallback } from "react";
 /**
  * useAudioStreamCapture — Directives 011 & 012
  *
- * Intercepts the internal audio buffer of a <video> or <audio> element
- * using the Web Audio API. Returns a MediaStream that represents the
- * decoded PCM audio — NO microphone needed.
+ * Atomic 04.5: ScriptProcessorNode PCM Tap
  *
- * Atomic 04.1: Gesture-Locked Initialization
- * - AudioContext created in suspended state
- * - ctx.resume() is AWAITED inside the user gesture callstack
- * - createMediaElementSource only runs after context is confirmed "running"
- * - On failure: error = "Ready — Tap to Start" (no hang)
+ * Intercepts the internal audio buffer of a <video> or <audio> element
+ * using the Web Audio API. Instead of MediaRecorder (which triggers
+ * browser security popups), uses ScriptProcessorNode to directly
+ * collect raw PCM float values.
+ *
+ * Returns flushAudioBuffer() which provides accumulated PCM as
+ * Float32Array for the caller to encode and POST.
+ *
+ * NO MediaRecorder. NO captureStream. NO browser popups.
  */
 export default function useAudioStreamCapture(mediaElementRef, hasInteracted = false) {
-    const [captureStream, setCaptureStream] = useState(null);
     const [isCapturing, setIsCapturing] = useState(false);
     const [error, setError] = useState(null);
     const [needsInteraction, setNeedsInteraction] = useState(false);
 
     const audioCtxRef = useRef(null);
     const sourceNodeRef = useRef(null);
-    const destinationRef = useRef(null);
+    const scriptNodeRef = useRef(null);
     const connectedRef = useRef(false);
     const pendingStartRef = useRef(false);
 
-    // ─── Atomic 04.3: Synchronous Gesture-First Handler ───
-    // NON-ASYNC wrapper ensures audioCtx.resume() is called as the
-    // VERY FIRST synchronous operation inside the user gesture callstack.
-    // A 0.1s silent buffer "primes" the browser before async capture begins.
+    // Atomic 04.5: PCM accumulator — raw Float32 samples collected in onaudioprocess
+    const pcmChunksRef = useRef([]);
+    const pcmSampleCountRef = useRef(0);
 
     /**
-     * _asyncCaptureWork — The deferred async portion.
-     * Only called AFTER resume() + silent buffer have already run synchronously.
+     * flushAudioBuffer — Returns all accumulated PCM samples as a single
+     * Float32Array and clears the buffer. Called every 3s by SubtitleOverlay.
+     * Returns null if no data accumulated.
+     */
+    const flushAudioBuffer = useCallback(() => {
+        const chunks = pcmChunksRef.current;
+        const totalSamples = pcmSampleCountRef.current;
+
+        if (chunks.length === 0 || totalSamples === 0) return null;
+
+        // Merge all chunks into a single Float32Array
+        const merged = new Float32Array(totalSamples);
+        let offset = 0;
+        for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+        }
+
+        // Clear the buffer
+        pcmChunksRef.current = [];
+        pcmSampleCountRef.current = 0;
+
+        return { samples: merged, sampleRate: audioCtxRef.current?.sampleRate || 44100 };
+    }, []);
+
+    /**
+     * _asyncCaptureWork — Deferred async portion.
+     * Creates MediaElementSource + ScriptProcessorNode after context is running.
      */
     const _asyncCaptureWork = useCallback(async (ctx) => {
         const el = mediaElementRef?.current;
@@ -44,7 +70,7 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
         }
 
         try {
-            // Guard — context must be running after the synchronous prime
+            // Guard — context must be running
             if (ctx.state !== "running") {
                 setNeedsInteraction(true);
                 setError("Ready \u2014 Tap to Start");
@@ -52,32 +78,47 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
                 return;
             }
 
-            // The Internal Tap — only after context is confirmed running
+            // Create MediaElementSource (only once)
             if (!sourceNodeRef.current) {
                 sourceNodeRef.current = ctx.createMediaElementSource(el);
                 connectedRef.current = true;
             }
 
-            if (!destinationRef.current) {
-                destinationRef.current = ctx.createMediaStreamDestination();
+            // Atomic 04.5: Create ScriptProcessorNode(4096, 1, 1)
+            if (!scriptNodeRef.current) {
+                const scriptNode = ctx.createScriptProcessor(4096, 1, 1);
+                scriptNode.onaudioprocess = (e) => {
+                    // Collect raw PCM float values from input buffer
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    // Copy the data (inputData is recycled by the browser)
+                    const chunk = new Float32Array(inputData.length);
+                    chunk.set(inputData);
+                    pcmChunksRef.current.push(chunk);
+                    pcmSampleCountRef.current += chunk.length;
+                };
+                scriptNodeRef.current = scriptNode;
             }
 
             const source = sourceNodeRef.current;
-            const destination = destinationRef.current;
+            const scriptNode = scriptNodeRef.current;
 
             try { source.disconnect(); } catch { /* not connected yet */ }
 
-            // Connect: source → speakers (so user still hears audio)
-            source.connect(ctx.destination);
-            // Connect: source → capture stream (for transcription)
-            source.connect(destination);
+            // Connect: source → scriptProcessor → ctx.destination
+            // Audio still plays through speakers AND we tap the PCM data
+            source.connect(scriptNode);
+            scriptNode.connect(ctx.destination);
 
-            setCaptureStream(destination.stream);
             setIsCapturing(true);
             setNeedsInteraction(false);
             setError(null);
             pendingStartRef.current = false;
-            console.log("[AudioStreamCapture] Internal tap active \u2014 capture stream ready");
+
+            // Clear any stale PCM data
+            pcmChunksRef.current = [];
+            pcmSampleCountRef.current = 0;
+
+            console.log("[AudioStreamCapture] 04.5 — ScriptProcessorNode PCM tap active");
         } catch (err) {
             console.error("[AudioStreamCapture] Failed:", err);
             setError("Ready \u2014 Tap to Start");
@@ -86,11 +127,11 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
     }, [mediaElementRef]);
 
     /**
-     * startCapture — Atomic 04.3: Synchronous "Gesture-First" Handler
+     * startCapture — Atomic 04.3+04.5: Synchronous "Gesture-First" Handler
      *
-     * Step 1 (Immediate): audioCtx.resume() — MUST be the first line.
-     * Step 2 (Immediate): Play a 0.1s silent buffer to prime the browser.
-     * Step 3 (Deferred):  Only then kick off async _asyncCaptureWork().
+     * Step 1 (Immediate): audioCtx.resume()
+     * Step 2 (Immediate): Play 0.1s silent buffer to prime browser
+     * Step 3 (Deferred):  Async capture work (ScriptProcessorNode setup)
      */
     const startCapture = useCallback(() => {
         const el = mediaElementRef?.current;
@@ -99,24 +140,23 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
             return;
         }
 
-        // Prevent double-creation of MediaElementSource
-        if (connectedRef.current && captureStream) {
-            setIsCapturing(true);
+        // Already capturing — no-op
+        if (connectedRef.current && isCapturing) {
             return;
         }
 
-        // ── Step 0: Ensure AudioContext exists ──
+        // Step 0: Ensure AudioContext exists
         if (!audioCtxRef.current) {
             const AudioCtx = window.AudioContext || window.webkitAudioContext;
             audioCtxRef.current = new AudioCtx();
         }
         const ctx = audioCtxRef.current;
 
-        // ── Step 1 (IMMEDIATE): Resume — MUST be synchronous, first call ──
+        // Step 1 (IMMEDIATE): Resume
         const resumePromise = ctx.resume();
-        console.log("[AudioStreamCapture] 04.3 — audioCtx.resume() fired (synchronous gesture callstack)");
+        console.log("[AudioStreamCapture] 04.5 — audioCtx.resume() fired");
 
-        // ── Step 2 (IMMEDIATE): Play 0.1s silent buffer to "prime" the browser ──
+        // Step 2 (IMMEDIATE): Play 0.1s silent buffer to prime
         try {
             const silentBuffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.1), ctx.sampleRate);
             const silentSource = ctx.createBufferSource();
@@ -124,45 +164,48 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
             silentSource.connect(ctx.destination);
             silentSource.start(0);
             silentSource.onended = () => { try { silentSource.disconnect(); } catch {} };
-            console.log("[AudioStreamCapture] 04.3 — Silent buffer primed (0.1s)");
         } catch (primeErr) {
-            console.warn("[AudioStreamCapture] 04.3 — Silent buffer prime failed:", primeErr);
+            console.warn("[AudioStreamCapture] 04.5 — Silent buffer prime failed:", primeErr);
         }
 
-        // ── Step 3 (DEFERRED): Async capture ONLY after resume resolves ──
+        // Step 3 (DEFERRED): ScriptProcessorNode setup
         resumePromise
             .then(() => {
-                console.log("[AudioStreamCapture] 04.3 — AudioContext confirmed running, starting capture");
+                console.log("[AudioStreamCapture] 04.5 — Context running, creating ScriptProcessor tap");
                 return _asyncCaptureWork(ctx);
             })
             .catch(() => {
                 setNeedsInteraction(true);
                 setError("Ready \u2014 Tap to Start");
                 pendingStartRef.current = true;
-                console.warn("[AudioStreamCapture] 04.3 — resume() rejected \u2014 needs gesture");
             });
-    }, [mediaElementRef, captureStream, _asyncCaptureWork]);
+    }, [mediaElementRef, isCapturing, _asyncCaptureWork]);
 
-    // ─── Atomic 01.1: Explicit stream disposal ───
+    /**
+     * cleanupAudio — Disconnect ScriptProcessorNode, clear PCM buffer.
+     */
     const cleanupAudio = useCallback(() => {
         try {
-            // Disconnect source from capture destination (keep speaker connection alive)
-            if (sourceNodeRef.current && destinationRef.current) {
-                try { sourceNodeRef.current.disconnect(destinationRef.current); } catch { /* already disconnected */ }
+            if (scriptNodeRef.current) {
+                try { scriptNodeRef.current.disconnect(); } catch {}
+                scriptNodeRef.current.onaudioprocess = null;
+                scriptNodeRef.current = null;
             }
-            // Stop all tracks on the capture stream to fully destroy it
-            if (destinationRef.current?.stream) {
-                destinationRef.current.stream.getTracks().forEach(t => t.stop());
+            // Reconnect source directly to destination so audio keeps playing
+            if (sourceNodeRef.current && audioCtxRef.current) {
+                try {
+                    sourceNodeRef.current.disconnect();
+                    sourceNodeRef.current.connect(audioCtxRef.current.destination);
+                } catch {}
             }
-            // Null the destination so startCapture creates a fresh one
-            destinationRef.current = null;
         } catch (err) {
             console.error("[AudioStreamCapture] cleanupAudio error:", err);
         }
-        // State reset — prevents "Cannot call write on destroyed stream"
-        setCaptureStream(null);
+        // Clear PCM buffer
+        pcmChunksRef.current = [];
+        pcmSampleCountRef.current = 0;
         setIsCapturing(false);
-        console.log("[AudioStreamCapture] cleanupAudio \u2014 stream disposed & nulled");
+        console.log("[AudioStreamCapture] cleanupAudio — ScriptProcessor disconnected, PCM buffer cleared");
     }, []);
 
     const stopCapture = useCallback(() => {
@@ -173,13 +216,9 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
     useEffect(() => {
         if (hasInteracted) {
             setNeedsInteraction(false);
-
-            // Resume suspended AudioContext
             if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
-                audioCtxRef.current.resume().catch(() => { });
+                audioCtxRef.current.resume().catch(() => {});
             }
-
-            // If we had a pending start, try now
             if (pendingStartRef.current) {
                 startCapture();
             }
@@ -190,6 +229,10 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
     useEffect(() => {
         return () => {
             try {
+                if (scriptNodeRef.current) {
+                    scriptNodeRef.current.onaudioprocess = null;
+                    scriptNodeRef.current.disconnect();
+                }
                 if (sourceNodeRef.current) {
                     sourceNodeRef.current.disconnect();
                 }
@@ -200,20 +243,25 @@ export default function useAudioStreamCapture(mediaElementRef, hasInteracted = f
                 // Silent cleanup
             }
             connectedRef.current = false;
+            pcmChunksRef.current = [];
+            pcmSampleCountRef.current = 0;
         };
     }, []);
 
     return {
-        captureStream,
+        /** Whether ScriptProcessor is actively tapping audio */
         isCapturing,
         error,
         /** Whether AudioContext is blocked waiting for user gesture */
         needsInteraction,
+        /** Atomic 04.3+04.5: Synchronous gesture-first start */
         startCapture,
         stopCapture,
-        /** Atomic 01.1: Explicit disposal for pause/unmount */
+        /** Atomic 04.5: Flush accumulated PCM → Float32Array */
+        flushAudioBuffer,
+        /** Cleanup for pause/unmount */
         cleanupAudio,
-        /** Atomic 04.4: Exposed ref so parent can call resume() synchronously */
+        /** Atomic 04.4: Direct audioCtx ref for parent synchronous resume */
         audioCtxRef,
     };
 }
